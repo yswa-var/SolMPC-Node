@@ -1,6 +1,6 @@
 A validator node for the Tilt Validator Specification on Solana, using Go for off-chain computation and distributed signing!!
 
-## Simplified Task Checklist for Tilt Validator Project
+## Task Checklist
 
 ### 1. **Setup**
 - Install the latest Go version.
