@@ -46,3 +46,8 @@ A validator node for the Tilt Validator Specification on Solana, using Go for of
 - Deploy to Solana testnet.
 - Monitor logs and performance.
 - Conduct security audit.
+
+
+## incode todo's
+- TODO: save these keys to HSM
+- 
