@@ -4,7 +4,12 @@ go 1.24
 
 require github.com/coinbase/kryptology v1.8.0
 
-require go.dedis.ch/fixbuf v1.0.3 // indirect
+require (
+	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/nats-io/nkeys v0.4.9 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
+	go.dedis.ch/fixbuf v1.0.3 // indirect
+)
 
 require (
 	filippo.io/edwards25519 v1.0.0-rc.1 // indirect
@@ -13,9 +18,10 @@ require (
 	github.com/consensys/gnark-crypto v0.5.3 // indirect
 	github.com/dashpay/bls-signatures/go-bindings v0.0.0-20241206210929-0bb5c5b03249
 	github.com/herumi/bls-go-binary v1.35.1
+	github.com/nats-io/nats.go v1.39.1
 	github.com/pkg/errors v0.9.1 // indirect
 	go.dedis.ch/kyber/v3 v3.1.0
-	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d // indirect
+	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
