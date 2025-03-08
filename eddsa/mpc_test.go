@@ -3,8 +3,14 @@ package ecdsa
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/csv"
+	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -116,14 +122,83 @@ func (parties parties) Mapping() map[string]*tss.PartyID {
 
 //sendMSG( msgBytes []byte, broadcast bool, to uint16)
 
+// generateRandomHash generates a random SHA-256 hash string.
+func solanaTransaction() (string, error) {
+	// demo function whcih mimics the solana transaction for vaidation.
+	// Create a new SHA-256 hash
+	hash := sha256.New()
+
+	// Generate a random number.
+	randomBytes := make([]byte, 32)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %v", err)
+	}
+
+	// Write the random bytes to the hash.
+	_, err = hash.Write(randomBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to write to hash: %v", err)
+	}
+
+	// Compute the hash and return it as a hex string.
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// Validator represents a validator with an ID and name.
+type Validator struct {
+	ID   string
+	Name string
+}
+
+// loadValidators loads the validators from a CSV file.
+func loadValidators(filePath string) ([]Validator, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CSV file: %v", err)
+	}
+
+	var validators []Validator
+	for _, record := range records {
+		if len(record) != 2 {
+			return nil, fmt.Errorf("invalid record: %v", record)
+		}
+		validators = append(validators, Validator{ID: record[0], Name: record[1]})
+	}
+
+	return validators, nil
+}
+
 // TestTSS is a test function for the TSS protocol.
 func TestTSS(t *testing.T) {
-	// Create three validators with unique IDs and loggers.
-	// in this case we are taking 3 parties, but we can take any number of parties.
-	pA := NewParty(1, logger("pA", t.Name()))
-	pB := NewParty(2, logger("pB", t.Name()))
-	pC := NewParty(3, logger("pC", t.Name()))
-	pA.Transport.ReadMsg()
+	// insted of creating new party we find already running parties.
+
+	// Load the validators from the CSV file.
+	validators, err := loadValidators("validators.csv")
+	if err != nil {
+		t.Fatalf("failed to load validators: %v", err)
+	}
+
+	// Create a new party for each validator.
+	var liveParties parties
+	for _, v := range validators {
+		id, err := strconv.ParseUint(v.ID, 10, 16)
+		if err != nil {
+			t.Fatalf("invalid ID %s: %v", v.ID, err)
+		}
+		p := NewParty(uint16(id), logger(v.Name, t.Name()))
+		liveParties = append(liveParties, p)
+	}
+	pA := liveParties[0]
+	pB := liveParties[1]
+	pC := liveParties[2]
 
 	// Initialize the parties and run the distributed key generation (DKG).
 	parties1 := parties{pA, pB, pC}
