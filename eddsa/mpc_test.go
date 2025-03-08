@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,9 +175,9 @@ func loadValidators(filePath string) ([]Validator, error) {
 	return validators, nil
 }
 
-// TestTSS is a test function for the TSS protocol.
+// TestTSS is a test function for the simulation of how validators will work parties == validators.
 func TestTSS(t *testing.T) {
-	// insted of creating new party we find already running parties.
+	// when a validator will start it will save id and name in the csv file.
 
 	// Load the validators from the CSV file.
 	validators, err := loadValidators("validators.csv")
@@ -186,37 +185,24 @@ func TestTSS(t *testing.T) {
 		t.Fatalf("failed to load validators: %v", err)
 	}
 
-	// Create a new party for each validator.
-	var liveParties parties
-	for _, v := range validators {
-		id, err := strconv.ParseUint(v.ID, 10, 16)
-		if err != nil {
-			t.Fatalf("invalid ID %s: %v", v.ID, err)
-		}
-		p := NewParty(uint16(id), logger(v.Name, t.Name()))
-		liveParties = append(liveParties, p)
+	// creating validators from validators.csv
+	var parties parties
+	for i, v := range validators {
+		p := NewParty(uint16(i+1), logger(v.ID, t.Name()))
+		parties = append(parties, p)
 	}
-	pA := liveParties[0]
-	pB := liveParties[1]
-	pC := liveParties[2]
+	parties.init(senders(parties))
 
-	// Initialize the parties and run the distributed key generation (DKG).
-	parties1 := parties{pA, pB, pC}
-	parties1.init(senders(parties1))
-
-	t.Logf("######### DKG STARTING #################")
+	t.Logf("Running DKG")
 
 	t1 := time.Now()
-
-	shares, err := parties.keygen(parties1)
+	shares, err := parties.keygen()
 	assert.NoError(t, err)
 	t.Logf("DKG elapsed %s", time.Since(t1))
 
-	// Reinitialize two parties with the generated shares and perform signing.
-	parties2 := parties{pA}
-	parties2.init(senders(parties2))
+	parties.init(senders(parties))
 
-	parties2.setShareData(shares)
+	parties.setShareData(shares)
 
 	t.Logf("Signing")
 
@@ -224,27 +210,23 @@ func TestTSS(t *testing.T) {
 
 	t.Logf("Signing message")
 	t1 = time.Now()
-	sigs, err := parties2.sign(digest(msgToSign))
+	sigs, err := parties.sign(digest(msgToSign))
 	assert.NoError(t, err)
 	t.Logf("Signing completed in %v", time.Since(t1))
 
-	// Verify that the signatures are consistent and valid.
 	sigSet := make(map[string]struct{})
 	for _, s := range sigs {
 		sigSet[string(s)] = struct{}{}
 	}
 	assert.Len(t, sigSet, 1)
 
-	pk, err := parties2[0].ThresholdPK()
+	pk, err := parties[0].ThresholdPK()
 	assert.NoError(t, err)
 
 	assert.True(t, ed25519.Verify(pk, digest(msgToSign), sigs[0]))
 }
 
 // senders returns a slice of sender functions for each party.
-// Each sender function is responsible for sending messages from one party to another.
-// If the broadcast flag is true, the message is sent to all parties except the sender.
-// If the broadcast flag is false, the message is sent only to the specified party.
 func senders(parties parties) []Sender {
 	var senders []Sender
 	for _, src := range parties {
