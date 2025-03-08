@@ -1,4 +1,4 @@
-package ecdsa
+package main
 
 import (
 	"context"
@@ -12,20 +12,29 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"testing"
+	mpc "teddsa/eddsa"
 	"time"
 
 	"github.com/bnb-chain/tss-lib/v2/tss"
-	"github.com/stretchr/testify/assert"
 
-	// tsslib "crypto/tss-lib"
 	"go.uber.org/zap"
 )
 
 const threshold = 1
 
+type parties []*mpc.Party
+
+func (parties parties) numericIDs() []uint16 {
+	var res []uint16
+	for _, p := range parties {
+		res = append(res, uint16(big.NewInt(0).SetBytes(p.Id.Key).Uint64()))
+	}
+
+	return res
+}
+
 // init initializes the parties with the given senders.
-func (parties parties) init(senders []Sender) {
+func (parties parties) init(senders []mpc.Sender) {
 	// Initialize each party with the numeric IDs of all parties, the threshold, and the corresponding sender function.
 	for i, p := range parties {
 		p.Init(parties.numericIDs(), threshold, senders[i])
@@ -50,7 +59,7 @@ func (parties parties) sign(msg []byte) ([][]byte, error) {
 	wg.Add(len(parties))
 
 	for _, p := range parties {
-		go func(p *Party) {
+		go func(p *mpc.Party) {
 			defer wg.Done()
 			// Each party signs the message.
 			sig, err := p.Sign(context.Background(), msg)
@@ -85,7 +94,7 @@ func (parties parties) keygen() ([][]byte, error) {
 	wg.Add(len(parties))
 
 	for i, p := range parties {
-		go func(p *Party, i int) {
+		go func(p *mpc.Party, i int) {
 			defer wg.Done()
 			// Each party performs key generation.
 			share, err := p.KeyGen(context.Background())
@@ -175,61 +184,68 @@ func loadValidators(filePath string) ([]Validator, error) {
 	return validators, nil
 }
 
-// TestTSS is a test function for the simulation of how validators will work parties == validators.
-func TestTSS(t *testing.T) {
-	// when a validator will start it will save id and name in the csv file.
-
-	// Load the validators from the CSV file.
+func main() {
 	validators, err := loadValidators("validators.csv")
 	if err != nil {
-		t.Fatalf("failed to load validators: %v", err)
+		fmt.Println("Error loading validators:", err)
 	}
 
 	// creating validators from validators.csv
 	var parties parties
 	for i, v := range validators {
-		p := NewParty(uint16(i+1), logger(v.ID, t.Name()))
+		p := mpc.NewParty(uint16(i+1), logger(v.ID, "main"))
 		parties = append(parties, p)
 	}
-	time.Sleep(1 * time.Second)
 	parties.init(senders(parties))
 
-	t.Logf("Running DKG")
+	println("DKG")
 
 	t1 := time.Now()
 	shares, err := parties.keygen()
-	assert.NoError(t, err)
-	t.Logf("DKG elapsed %s", time.Since(t1))
+	if err != nil {
+		fmt.Println("Error performing DKG:", err)
+	}
+	println("DKG completed in", time.Since(t1))
 
 	parties.init(senders(parties))
 
 	parties.setShareData(shares)
 
-	t.Logf("Signing")
+	println("Signing message")
 
-	msgToSign := []byte("bla bla")
-
-	t.Logf("Signing message")
+	msgToSign := []byte("asdfhjgkhbjhfbvsdlkjfnvslakjsdnalvsjkvnald")
 	t1 = time.Now()
-	sigs, err := parties.sign(Digest(msgToSign))
-	assert.NoError(t, err)
-	t.Logf("Signing completed in %v", time.Since(t1))
+	sigs, err := parties.sign(mpc.Digest(msgToSign))
+	if err != nil {
+		fmt.Println("Error signing message:", err)
+	}
+	println("Signing completed in", time.Since(t1))
 
 	sigSet := make(map[string]struct{})
 	for _, s := range sigs {
 		sigSet[string(s)] = struct{}{}
 	}
-	assert.Len(t, sigSet, 1)
+	if len(sigSet) != 1 {
+		fmt.Println("Error: Signatures are not identical")
+	} else {
+		fmt.Println("Signatures are identical")
+	}
 
 	pk, err := parties[0].ThresholdPK()
-	assert.NoError(t, err)
+	if err != nil {
+		fmt.Println("Error getting threshold public key:", err)
+	}
 
-	assert.True(t, ed25519.Verify(pk, Digest(msgToSign), sigs[0]))
+	if !ed25519.Verify(pk, mpc.Digest(msgToSign), sigs[0]) {
+		fmt.Println("Signature verification failed")
+	} else {
+		fmt.Println("Signature verification succeeded")
+	}
 }
 
 // senders returns a slice of sender functions for each party.
-func senders(parties parties) []Sender {
-	var senders []Sender
+func senders(parties parties) []mpc.Sender {
+	var senders []mpc.Sender
 	for _, src := range parties {
 		src := src
 		sender := func(msgBytes []byte, broadcast bool, to uint16) {
@@ -255,8 +271,33 @@ func senders(parties parties) []Sender {
 	return senders
 }
 
+func getLiveValidators(filename string) []Validator {
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return nil
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		fmt.Println("Error reading CSV:", err)
+		return nil
+	}
+
+	var validators []Validator
+	for _, record := range records {
+		validators = append(validators, Validator{
+			ID:   record[0],
+			Name: record[1],
+		})
+	}
+	return validators
+}
+
 // logger creates a logger with the given ID and test name.
-func logger(id string, testName string) Logger {
+func logger(id string, testName string) mpc.Logger {
 	logConfig := zap.NewDevelopmentConfig()
 	logger, _ := logConfig.Build()
 	logger = logger.With(zap.String("t", testName)).With(zap.String("id", id))

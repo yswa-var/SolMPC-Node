@@ -2,40 +2,49 @@ package exchange
 
 import (
 	"encoding/csv"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"strconv"
 )
 
-func (t *Transport) SendMsg(from int, broadcast bool, to int, message string) error {
+func (t *Transport) SendMsg(message []byte, broadcast bool, to uint16) {
 
+	from := t.partyID
 	if broadcast {
-		for _, party := range t.getParties() {
-			if party == from {
+		for _, party_ := range t.getParties() {
+			party := int(party_)
+			if int(party) == from {
 				continue
 			}
-			file, err := os.OpenFile(t.GetReceiverFileName(strconv.Itoa(party)), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			t.Mutex.Lock()
+			file, err := os.OpenFile(t.GetReceiverFileName(strconv.Itoa(int(party))), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
-				return err
+				fmt.Println("Error opening file:", err)
+				return
 			}
 			defer file.Close()
 			writer := csv.NewWriter(file)
 			defer writer.Flush()
-
 			record := []string{
 				strconv.Itoa(from),
 				strconv.FormatBool(broadcast),
-				strconv.Itoa(party),
-				message,
+				strconv.Itoa(int(party)),
+				hex.EncodeToString(message),
 			}
 
 			if err := writer.Write(record); err != nil {
-				return err
+				fmt.Println("Error writing to file:", err)
+				return
 			}
+			t.Mutex.Unlock()
+
 		}
 	} else {
-		file, err := os.OpenFile(t.GetReceiverFileName(strconv.Itoa(to)), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		t.Mutex.Lock()
+		file, err := os.OpenFile(t.GetReceiverFileName(strconv.Itoa(int(to))), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			return err
+			return
 		}
 		defer file.Close()
 		writer := csv.NewWriter(file)
@@ -44,14 +53,17 @@ func (t *Transport) SendMsg(from int, broadcast bool, to int, message string) er
 		record := []string{
 			strconv.Itoa(from),
 			strconv.FormatBool(broadcast),
-			strconv.Itoa(to),
-			message,
+			strconv.Itoa(int(to)),
+			hex.EncodeToString(message),
 		}
 
 		if err := writer.Write(record); err != nil {
-			return err
+			fmt.Println("Error writing to file:", err)
+			return
 		}
+		t.Mutex.Unlock()
+
 	}
-	return nil
+	return
 
 }

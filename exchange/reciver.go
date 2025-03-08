@@ -1,12 +1,26 @@
 package exchange
 
 import (
+	"crypto/md5"
 	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"os"
+	"strconv"
+	"time"
 )
+
+type Msg struct {
+	From      int
+	Broadcast bool
+	To        int
+	Message   []byte
+}
 
 func (t *Transport) ReadMsg() ([][]string, error) {
 	fileName := t.GetFileName()
+	t.Mutex.Lock()
 	file, err := os.Open(fileName)
 	if err != nil {
 		return nil, err
@@ -15,17 +29,85 @@ func (t *Transport) ReadMsg() ([][]string, error) {
 
 	reader := csv.NewReader(file)
 	reader.LazyQuotes = true
-	records, err := reader.ReadAll()
+	record, err := reader.ReadAll()
 	if err != nil {
 		return nil, err
 	}
+	t.Mutex.Unlock()
 
-	// After reading the line, delete it
-	if len(records) > 0 {
-		records = records[1:]
+	if len(record) > 0 {
+		record = record[:]
 	}
 
-	return records, nil
+	return record, nil
+}
+
+func (t *Transport) ReadMsgToChannel(ch chan<- []byte) error {
+	records, err := t.ReadMsg()
+	if err != nil {
+		return err
+	}
+
+	for _, record := range records {
+		from, _ := strconv.Atoi(record[0])
+		broadcast, _ := strconv.ParseBool(record[1])
+		to, _ := strconv.Atoi(record[2])
+		msg_, _ := hex.DecodeString(record[3])
+		msg := Msg{
+			From:      from,
+			Broadcast: broadcast,
+			To:        to,
+			Message:   msg_,
+		}
+		byteMsg, err := json.Marshal(msg)
+		if err != nil {
+			return err
+		}
+		ch <- byteMsg
+	}
+	return nil
+}
+
+func (t *Transport) getFileHash() (string, error) {
+	fileName := t.GetFileName()
+	file, err := os.Open(fileName)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// Create a new hash
+	hash := md5.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+
+	return string(hash.Sum(nil)), nil
+}
+
+func (t *Transport) WatchFile(interval time.Duration, ch chan<- []byte) {
+	var lastHash string
+
+	// Infinite loop to check the file hash
+	for {
+		currentHash, err := t.getFileHash()
+		if err != nil {
+			time.Sleep(interval)
+			continue
+		}
+
+		// If the hash is different, read the message to the channel
+		if currentHash != lastHash {
+			lastHash = currentHash
+			err := t.ReadMsgToChannel(ch)
+			if err != nil {
+				time.Sleep(interval)
+				continue
+			}
+		}
+
+		time.Sleep(interval)
+	}
 }
 
 // func main() {

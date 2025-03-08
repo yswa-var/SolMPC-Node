@@ -10,6 +10,7 @@ require (
 	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/zap v1.27.0
+	honnef.co/go/tools v0.0.1-2019.2.3
 )
 
 require (

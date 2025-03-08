@@ -146,7 +146,7 @@ func (p *Party) OnMsg(msgBytes []byte, from uint16, broadcast bool) {
 		p.Logger.Warnf("Message claimed to be from %d but was received from %d", claimedFrom, from)
 		return
 	}
-
+	fmt.Println("********")
 	p.in <- msg
 }
 
@@ -359,7 +359,7 @@ func (p *Party) LoadLocalPartySaveData() {
 	}
 }
 
-func digest(in []byte) []byte {
+func Digest(in []byte) []byte {
 	h := sha256.New()
 	h.Write(in)
 	return h.Sum(nil)
