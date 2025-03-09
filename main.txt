@@ -1,28 +1,73 @@
-package main
+mpc:
+```
+package ecdsa
 
 import (
+	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/csv"
-	"encoding/hex"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"math"
 	"math/big"
 	"os"
+	"strconv"
 	"sync"
-	"sync/atomic"
-	mpc "teddsa/eddsa"
-	"time"
 
+	transport "teddsa/exchange"
+
+	"github.com/bnb-chain/tss-lib/v2/common"
+	"github.com/bnb-chain/tss-lib/v2/eddsa/keygen"
+	"github.com/bnb-chain/tss-lib/v2/eddsa/signing"
 	"github.com/bnb-chain/tss-lib/v2/tss"
-
-	"go.uber.org/zap"
+	"github.com/decred/dcrd/dcrec/edwards/v2"
+	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/ptypes/any"
 )
 
-const threshold = 1
+func init() {
+	tss.SetCurve(tss.Edwards())
+}
 
-type parties []*mpc.Party
+// This is Go code defining two maps (msgURL2Round and broadcastMessages)
+// related to a Threshold Signature Scheme (TSS) implementation
+// using EDDSA (Edwards-Curve Digital Signature Algorithm).
+var (
+	msgURL2Round = map[string]uint8{
+
+		// These message types likely correspond to protobuf-encoded
+		// messages used in distributed signing.
+		// DKG
+		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound1Message":  1,
+		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message1": 2,
+		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message2": 3,
+
+		// Signing
+		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound1Message": 5,
+		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound2Message": 6,
+		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound3Message": 7,
+	}
+
+	broadcastMessages = map[string]struct{}{
+		// This map tracks messages that should be broadcast to all parties.
+
+		// DKG
+		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound1Message":  {},
+		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message2": {},
+
+		// Signing
+		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound1Message": {},
+		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound2Message": {},
+		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound3Message": {},
+	}
+)
+
+type Sender func(msg []byte, isBroadcast bool, to uint16)
+
+type parties []*Party
 
 func (parties parties) numericIDs() []uint16 {
 	var res []uint16
@@ -33,273 +78,376 @@ func (parties parties) numericIDs() []uint16 {
 	return res
 }
 
-// init initializes the parties with the given senders.
-func (parties parties) init(senders []mpc.Sender) {
-	// Initialize each party with the numeric IDs of all parties, the threshold, and the corresponding sender function.
-	for i, p := range parties {
-		p.Init(parties.numericIDs(), threshold, senders[i])
+type Logger interface {
+	Debugf(format string, a ...interface{})
+	Warnf(format string, a ...interface{})
+	Errorf(format string, a ...interface{})
+	Infof(format string, a ...interface{})
+}
+
+type Party struct {
+	Transport *transport.Transport
+	Logger    Logger
+	sendMsg   Sender
+	Id        *tss.PartyID
+	params    *tss.Parameters
+	out       chan tss.Message
+	in        chan tss.Message
+	shareData *keygen.LocalPartySaveData
+	closeChan chan struct{}
+}
+
+type ShareData struct {
+	Xi      uint64 `json:"Xi"`
+	ShareID int    `json:"ShareID"`
+	Ks      []int  `json:"Ks"`
+	BigXj   []struct {
+		Curve  string   `json:"Curve"`
+		Coords []uint64 `json:"Coords"`
+	} `json:"BigXj"`
+	EDDSAPub struct {
+		Curve  string   `json:"Curve"`
+		Coords []uint64 `json:"Coords"`
+	} `json:"EDDSAPub"`
+}
+
+func (p *Party) GetShareData() (ShareData, error) {
+	fileName := fmt.Sprintf("localsavedata_eddsa%d", p.ID().Index-1) // Construct file name
+
+	file, err := os.Open(fileName)
+	if err != nil {
+		return ShareData{}, fmt.Errorf("failed to open key share file: %w", err)
+	}
+	defer file.Close()
+
+	var shareData ShareData
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&shareData); err != nil {
+		return ShareData{}, fmt.Errorf("failed to parse key share data: %w", err)
+	}
+
+	return shareData, nil
+}
+
+func NewParty(id uint16, logger Logger) *Party {
+	return &Party{
+		Logger: logger,
+		Id:     tss.NewPartyID(fmt.Sprintf("%d", id), "", big.NewInt(int64(id))),
+		out:    make(chan tss.Message, 1000),
+		in:     make(chan tss.Message, 1000),
 	}
 }
 
-// setShareData sets the share data for each party.
-func (parties parties) setShareData(shareData [][]byte) {
-	// Set the share data for each party.
-	for i, p := range parties {
-		p.SetShareData(shareData[i])
-	}
+func (p *Party) ID() *tss.PartyID {
+	return p.Id
 }
 
-// sign signs the given message using each party's private key.
-func (parties parties) sign(msg []byte) ([][]byte, error) {
-	var lock sync.Mutex
-	var sigs [][]byte
-	var threadSafeError atomic.Value
+func (p *Party) locatePartyIndex(id *tss.PartyID) int {
+	for index, p := range p.params.Parties().IDs() {
+		if bytes.Equal(p.Key, id.Key) {
+			return index
+		}
+	}
 
-	var wg sync.WaitGroup
-	wg.Add(len(parties))
+	return -1
+}
 
+func (p *Party) ClassifyMsg(msgBytes []byte) (uint8, bool, error) {
+	msg := &any.Any{}
+	if err := proto.Unmarshal(msgBytes, msg); err != nil {
+		p.Logger.Warnf("Received invalid message: %v", err)
+		return 0, false, err
+	}
+
+	_, isBroadcast := broadcastMessages[msg.TypeUrl]
+
+	round := msgURL2Round[msg.TypeUrl]
+	if round > 4 {
+		round = round - 4
+	}
+	return round, isBroadcast, nil
+}
+
+func (p *Party) OnMsg(msgBytes []byte, from uint16, broadcast bool) {
+	id := tss.NewPartyID(fmt.Sprintf("%d", from), "", big.NewInt(int64(from)))
+	id.Index = p.locatePartyIndex(id)
+	msg, err := tss.ParseWireMessage(msgBytes, id, broadcast)
+	if err != nil {
+		p.Logger.Warnf("Received invalid message (%s) of %d bytes from %d: %v", base64.StdEncoding.EncodeToString(msgBytes), len(msgBytes), from, err)
+		return
+	}
+
+	key := msg.GetFrom().KeyInt()
+	if key == nil || key.Cmp(big.NewInt(int64(math.MaxUint16))) >= 0 {
+		p.Logger.Warnf("Message received from invalid key: %v", key)
+		return
+	}
+
+	claimedFrom := uint16(key.Uint64())
+	if claimedFrom != from {
+		p.Logger.Warnf("Message claimed to be from %d but was received from %d", claimedFrom, from)
+		return
+	}
+	fmt.Println("********")
+	p.in <- msg
+}
+
+func (p *Party) ThresholdPK() ([]byte, error) {
+	if p.shareData == nil {
+		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
+	}
+
+	pk := p.shareData.EDDSAPub
+
+	edPK := &edwards.PublicKey{
+		Curve: tss.Edwards(),
+		X:     pk.X(),
+		Y:     pk.Y(),
+	}
+
+	pkBytes := copyBytes(edPK.Serialize())
+	return pkBytes[:], nil
+}
+
+func (p *Party) CheckShareData() bool {
+	return p.shareData == nil
+}
+
+func (p *Party) SetShareData(shareData []byte) error {
+	var localSaveData keygen.LocalPartySaveData
+	err := json.Unmarshal(shareData, &localSaveData)
+	if err != nil {
+		return fmt.Errorf("failed deserializing shares: %w", err)
+	}
+	localSaveData.EDDSAPub.SetCurve(tss.Edwards())
+	for _, xj := range localSaveData.BigXj {
+		xj.SetCurve(tss.Edwards())
+	}
+	p.shareData = &localSaveData
+	return nil
+}
+
+func (p *Party) Init(parties []uint16, threshold int, sendMsg func(msg []byte, isBroadcast bool, to uint16)) {
+	partyIDs := partyIDsFromNumbers(parties)
+	ctx := tss.NewPeerContext(partyIDs)
+	p.params = tss.NewParameters(tss.Edwards(), ctx, p.Id, len(parties), threshold)
+	p.Id.Index = p.locatePartyIndex(p.Id)
+	p.sendMsg = sendMsg
+	p.closeChan = make(chan struct{})
+	go p.sendMessages()
+}
+
+func partyIDsFromNumbers(parties []uint16) []*tss.PartyID {
+	var partyIDs []*tss.PartyID
 	for _, p := range parties {
-		go func(p *mpc.Party) {
-			defer wg.Done()
-			// Each party signs the message.
-			sig, err := p.Sign(context.Background(), msg)
-			if err != nil {
-				threadSafeError.Store(err.Error())
-				return
-			}
-
-			lock.Lock()
-			sigs = append(sigs, sig)
-			lock.Unlock()
-		}(p)
+		pID := tss.NewPartyID(fmt.Sprintf("%d", p), "", big.NewInt(int64(p)))
+		partyIDs = append(partyIDs, pID)
 	}
-
-	wg.Wait()
-
-	err := threadSafeError.Load()
-	if err != nil {
-		return nil, fmt.Errorf(err.(string))
-	}
-
-	return sigs, nil
+	return tss.SortPartyIDs(partyIDs)
 }
 
-// keygen performs the distributed key generation protocol and returns the shares.
-func (parties parties) keygen() ([][]byte, error) {
-	var lock sync.Mutex
-	shares := make([][]byte, len(parties))
-	var threadSafeError atomic.Value
-
-	var wg sync.WaitGroup
-	wg.Add(len(parties))
-
-	for i, p := range parties {
-		go func(p *mpc.Party, i int) {
-			defer wg.Done()
-			// Each party performs key generation.
-			share, err := p.KeyGen(context.Background())
-			if err != nil {
-				threadSafeError.Store(err.Error())
-				return
-			}
-
-			lock.Lock()
-			shares[i] = share
-			lock.Unlock()
-		}(p, i)
+func (p *Party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
+	if p.shareData == nil {
+		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
 	}
+	p.Logger.Debugf("Starting signing")
+	defer p.Logger.Debugf("Finished signing")
 
-	wg.Wait()
+	defer close(p.closeChan)
 
-	err := threadSafeError.Load()
-	if err != nil {
-		return nil, fmt.Errorf(err.(string))
-	}
+	end := make(chan *common.SignatureData, 1)
 
-	return shares, nil
-}
+	msgToSign := big.NewInt(0).SetBytes(msgHash)
+	party := signing.NewLocalParty(msgToSign, p.params, *p.shareData, p.out, end)
 
-// Mapping returns a map of party IDs to party objects.
-func (parties parties) Mapping() map[string]*tss.PartyID {
-	partyIDMap := make(map[string]*tss.PartyID)
-	for _, id := range parties {
-		partyIDMap[id.Id.Id] = id.Id
-	}
-	return partyIDMap
-}
+	var endWG sync.WaitGroup
+	endWG.Add(1)
 
-//sendMSG( msgBytes []byte, broadcast bool, to uint16)
-
-// generateRandomHash generates a random SHA-256 hash string.
-func solanaTransaction() (string, error) {
-	// demo function whcih mimics the solana transaction for vaidation.
-	// Create a new SHA-256 hash
-	hash := sha256.New()
-
-	// Generate a random number.
-	randomBytes := make([]byte, 32)
-	_, err := rand.Read(randomBytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %v", err)
-	}
-
-	// Write the random bytes to the hash.
-	_, err = hash.Write(randomBytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to write to hash: %v", err)
-	}
-
-	// Compute the hash and return it as a hex string.
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-// Validator represents a validator with an ID and name.
-type Validator struct {
-	ID   string
-	Name string
-}
-
-// loadValidators loads the validators from a CSV file.
-func loadValidators(filePath string) ([]Validator, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CSV file: %v", err)
-	}
-
-	var validators []Validator
-	for _, record := range records {
-		if len(record) != 2 {
-			return nil, fmt.Errorf("invalid record: %v", record)
+	go func() {
+		defer endWG.Done()
+		err := party.Start()
+		if err != nil {
+			p.Logger.Errorf("Failed signing: %v", err)
 		}
-		validators = append(validators, Validator{ID: record[0], Name: record[1]})
-	}
+	}()
 
-	return validators, nil
-}
+	defer endWG.Wait()
 
-func main() {
-	validators, err := loadValidators("validators.csv")
-	if err != nil {
-		fmt.Println("Error loading validators:", err)
-	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("signing timed out: %w", ctx.Err())
+		case sigOut := <-end:
+			if !bytes.Equal(sigOut.M, msgToSign.Bytes()) {
+				return nil, fmt.Errorf("message we requested to sign is %s but actual message signed is %s",
+					base64.StdEncoding.EncodeToString(msgHash),
+					base64.StdEncoding.EncodeToString(sigOut.M))
+			}
+			var sig struct {
+				R, S *big.Int
+			}
+			sig.R = big.NewInt(0)
+			sig.S = big.NewInt(0)
+			sig.R.SetBytes(sigOut.R)
+			sig.S.SetBytes(sigOut.S)
 
-	// creating validators from validators.csv
-	var parties parties
-	for i, v := range validators {
-		p := mpc.NewParty(uint16(i+1), logger(v.ID, "main"))
-		parties = append(parties, p)
-	}
-	parties.init(senders(parties))
-
-	println("DKG")
-
-	t1 := time.Now()
-	shares, err := parties.keygen()
-	if err != nil {
-		fmt.Println("Error performing DKG:", err)
-	}
-	println("DKG completed in", time.Since(t1))
-
-	parties.init(senders(parties))
-
-	parties.setShareData(shares)
-
-	println("Signing message")
-
-	msgToSign := []byte("asdfhjgkhbjhfbvsdlkjfnvslakjsdnalvsjkvnald")
-	t1 = time.Now()
-	sigs, err := parties.sign(mpc.Digest(msgToSign))
-	if err != nil {
-		fmt.Println("Error signing message:", err)
-	}
-	println("Signing completed in", time.Since(t1))
-
-	sigSet := make(map[string]struct{})
-	for _, s := range sigs {
-		sigSet[string(s)] = struct{}{}
-	}
-	if len(sigSet) != 1 {
-		fmt.Println("Error: Signatures are not identical")
-	} else {
-		fmt.Println("Signatures are identical")
-	}
-
-	pk, err := parties[0].ThresholdPK()
-	if err != nil {
-		fmt.Println("Error getting threshold public key:", err)
-	}
-
-	if !ed25519.Verify(pk, mpc.Digest(msgToSign), sigs[0]) {
-		fmt.Println("Signature verification failed")
-	} else {
-		fmt.Println("Signature verification succeeded")
+			s := &edwards.Signature{R: sig.R, S: sig.S}
+			log.Println("Signature Generated\n\n", "R:", sig.R.Text(16), "\n S:", sig.S.Text(16), "\n\n ")
+			return s.Serialize(), nil
+		case msg := <-p.in:
+			raw, routing, err := msg.WireBytes()
+			if err != nil {
+				p.Logger.Warnf("Received error when serializing message: %v", err)
+				continue
+			}
+			p.Logger.Debugf("%s Got message from %s", p.Id.Id, routing.From.Id)
+			ok, err := party.UpdateFromBytes(raw, routing.From, routing.IsBroadcast)
+			if !ok {
+				p.Logger.Warnf("Received error when updating party: %v", err.Error())
+				continue
+			}
+		}
 	}
 }
 
-// senders returns a slice of sender functions for each party.
-func senders(parties parties) []mpc.Sender {
-	var senders []mpc.Sender
-	for _, src := range parties {
-		src := src
-		sender := func(msgBytes []byte, broadcast bool, to uint16) {
-			messageSource := uint16(big.NewInt(0).SetBytes(src.Id.Key).Uint64())
-			if broadcast {
-				for _, dst := range parties {
-					if dst.Id == src.Id {
-						continue
-					}
-					dst.OnMsg(msgBytes, messageSource, broadcast)
-				}
+func (p *Party) KeyGen(ctx context.Context) ([]byte, error) {
+	log.Println("EDDSA Keygen Started")
+	p.Logger.Debugf("Starting DKG")
+	defer p.Logger.Debugf("Finished DKG")
+
+	defer close(p.closeChan)
+
+	end := make(chan *keygen.LocalPartySaveData, 1)
+	party := keygen.NewLocalParty(p.params, p.out, end)
+
+	var endWG sync.WaitGroup
+	endWG.Add(1)
+
+	go func() {
+		defer endWG.Done()
+		err := party.Start()
+		if err != nil {
+			p.Logger.Errorf("Failed generating key: %v", err)
+		}
+	}()
+
+	defer endWG.Wait()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("DKG timed out: %w", ctx.Err())
+		case dkgOut := <-end:
+			dkgRawOut, err := json.Marshal(dkgOut)
+			p.Logger.Infof("Key-Gen Completed, Key-Share:", dkgOut.Xi.String())
+
+			if err != nil {
+				return nil, fmt.Errorf("failed serializing DKG output: %w", err)
+			}
+			p.SaveLocalPartySaveData(dkgRawOut)
+			return dkgRawOut, nil
+		case msg := <-p.in:
+			raw, routing, err := msg.WireBytes()
+			if err != nil {
+				p.Logger.Warnf("Received error when serializing message: %v", err)
+				continue
+			}
+			p.Logger.Debugf("%s Got message from %s", p.Id.Id, routing.From.Id)
+			ok, err := party.UpdateFromBytes(raw, routing.From, routing.IsBroadcast)
+			if !ok {
+				p.Logger.Warnf("Received error when updating party: %v", err.Error())
+				continue
+			}
+		}
+	}
+}
+
+func (p *Party) sendMessages() {
+	for {
+		select {
+		case <-p.closeChan:
+			return
+		case msg := <-p.out:
+			msgBytes, routing, err := msg.WireBytes()
+			if err != nil {
+				p.Logger.Warnf("Failed marshaling message: %v", err)
+				continue
+			}
+			if routing.IsBroadcast {
+				p.sendMsg(msgBytes, routing.IsBroadcast, 0)
 			} else {
-				for _, dst := range parties {
-					if to != uint16(big.NewInt(0).SetBytes(dst.Id.Key).Uint64()) {
-						continue
-					}
-					dst.OnMsg(msgBytes, messageSource, broadcast)
+				for _, to := range msg.GetTo() {
+					p.sendMsg(msgBytes, routing.IsBroadcast, uint16(big.NewInt(0).SetBytes(to.Key).Uint64()))
 				}
 			}
 		}
-		senders = append(senders, sender)
 	}
-	return senders
 }
 
-func getLiveValidators(filename string) []Validator {
-	file, err := os.Open(filename)
+func (p *Party) SaveLocalPartySaveData(shareData []byte) {
+	//save bytes data locally
+	WriteToFile("localsavedata_eddsa"+strconv.Itoa(p.ID().Index), shareData)
+	p.Logger.Debugf("Saved Data locally")
+
+}
+
+func (p *Party) LoadLocalPartySaveData() {
+	shareData, err := ReadFromFile("localsavedata_eddsa" + strconv.Itoa(p.ID().Index))
 	if err != nil {
-		fmt.Println("Error opening file:", err)
+		p.Logger.Debugf("Failed to load data", err)
+		return
+	} else {
+		p.SetShareData(shareData)
+	}
+}
+
+func Digest(in []byte) []byte {
+	h := sha256.New()
+	h.Write(in)
+	return h.Sum(nil)
+}
+
+// copyBytes copies a byte slice to a 32 byte array.
+func copyBytes(aB []byte) *[32]byte {
+	if aB == nil {
 		return nil
 	}
-	defer file.Close()
+	s := new([32]byte)
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+	// If we have a short byte string, expand
+	// it so that it's long enough.
+	aBLen := len(aB)
+	if aBLen < 32 {
+		diff := 32 - aBLen
+		for i := 0; i < diff; i++ {
+			aB = append([]byte{0x00}, aB...)
+		}
+	}
+
+	for i := 0; i < 32; i++ {
+		s[i] = aB[i]
+	}
+
+	return s
+}
+
+func WriteToFile(filename string, data []byte) error {
+	// Write data to the specified filename with permissions
+	err := os.WriteFile(filename, data, 0644) // 0644 allows owner to read/write and others to read
 	if err != nil {
-		fmt.Println("Error reading CSV:", err)
-		return nil
+		return err
 	}
-
-	var validators []Validator
-	for _, record := range records {
-		validators = append(validators, Validator{
-			ID:   record[0],
-			Name: record[1],
-		})
-	}
-	return validators
+	return nil
 }
 
-// logger creates a logger with the given ID and test name.
-func logger(id string, testName string) mpc.Logger {
-	logConfig := zap.NewDevelopmentConfig()
-	logger, _ := logConfig.Build()
-	logger = logger.With(zap.String("t", testName)).With(zap.String("id", id))
-	return logger.Sugar()
+func ReadFromFile(filename string) ([]byte, error) {
+	// Read the data from the file
+	data, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
+
+```
+

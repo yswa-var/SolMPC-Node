@@ -30,8 +30,14 @@ func init() {
 	tss.SetCurve(tss.Edwards())
 }
 
+// This is Go code defining two maps (msgURL2Round and broadcastMessages)
+// related to a Threshold Signature Scheme (TSS) implementation
+// using EDDSA (Edwards-Curve Digital Signature Algorithm).
 var (
 	msgURL2Round = map[string]uint8{
+
+		// These message types likely correspond to protobuf-encoded
+		// messages used in distributed signing.
 		// DKG
 		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound1Message":  1,
 		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message1": 2,
@@ -44,6 +50,8 @@ var (
 	}
 
 	broadcastMessages = map[string]struct{}{
+		// This map tracks messages that should be broadcast to all parties.
+
 		// DKG
 		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound1Message":  {},
 		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message2": {},
@@ -85,6 +93,38 @@ type Party struct {
 	in        chan tss.Message
 	shareData *keygen.LocalPartySaveData
 	closeChan chan struct{}
+}
+
+type ShareData struct {
+	Xi      uint64 `json:"Xi"`
+	ShareID int    `json:"ShareID"`
+	Ks      []int  `json:"Ks"`
+	BigXj   []struct {
+		Curve  string   `json:"Curve"`
+		Coords []uint64 `json:"Coords"`
+	} `json:"BigXj"`
+	EDDSAPub struct {
+		Curve  string   `json:"Curve"`
+		Coords []uint64 `json:"Coords"`
+	} `json:"EDDSAPub"`
+}
+
+func (p *Party) GetShareData() (ShareData, error) {
+	fileName := fmt.Sprintf("localsavedata_eddsa%d", p.ID().Index-1) // Construct file name
+
+	file, err := os.Open(fileName)
+	if err != nil {
+		return ShareData{}, fmt.Errorf("failed to open key share file: %w", err)
+	}
+	defer file.Close()
+
+	var shareData ShareData
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&shareData); err != nil {
+		return ShareData{}, fmt.Errorf("failed to parse key share data: %w", err)
+	}
+
+	return shareData, nil
 }
 
 func NewParty(id uint16, logger Logger) *Party {
@@ -146,7 +186,6 @@ func (p *Party) OnMsg(msgBytes []byte, from uint16, broadcast bool) {
 		p.Logger.Warnf("Message claimed to be from %d but was received from %d", claimedFrom, from)
 		return
 	}
-	fmt.Println("********")
 	p.in <- msg
 }
 
