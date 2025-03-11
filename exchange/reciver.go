@@ -109,6 +109,20 @@ func (t *Transport) WatchFile(interval time.Duration, ch chan<- []byte) {
 		time.Sleep(interval)
 	}
 }
+func (t *Transport) DeleteFileData() error {
+	// delete the file content without deleting the file
+	fileName := t.GetFileName()
+	t.Mutex.Lock()
+	defer t.Mutex.Unlock()
+
+	file, err := os.OpenFile(fileName, os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return nil
+}
 
 // func main() {
 // 	filename := "/Users/apple/Documents/GitHub/new_tss/transformer.csv"

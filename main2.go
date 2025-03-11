@@ -8,6 +8,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"strconv"
 	"sync"
@@ -102,7 +103,6 @@ func main() {
 	}
 	// to receive the incomming message from the other parties.
 	receiveChan := make(chan []byte, 10000) // Create a buffered channel to receive messages
-
 	// Create a list of party IDs
 	var parties []uint16
 	for i, _ := range validators[1:] {
@@ -129,28 +129,34 @@ func main() {
 	// Start watching the file for incoming messages, as soon as we get a message in the file ,we pass it to receiveChan
 	go transport.WatchFile(1*time.Millisecond, receiveChan) // Start watching the file for incoming messages
 
+	var keyShare []byte
 	// Start the DKG process in a goroutine
 	go func() {
 		defer wg.Done()
 
 		// here sign the message.
-		keyShare, err := mpcParty.KeyGen(context.Background()) // Perform distributed key generation
+		keyShare, err = mpcParty.KeyGen(context.Background()) // Perform distributed key generation
 		if err != nil {
 			fmt.Println("Error performing DKG:", err)
 		}
 		println("KeyShare:", len(keyShare))
+
 	}()
 
 	// When we get message into the receive Chan, we pass it to the mpcParty using OnMsg function of the party
-	for msg := range receiveChan { // Receive messages from the channel
-		// Unmarshal the JSON message, json messsage structre is defined in exchange package
-		var msgStructured exchange.Msg
-		json.Unmarshal(msg, &msgStructured)
-		//Pass the recieved message into the mpc party
-		mpcParty.OnMsg(msgStructured.Message, uint16(msgStructured.From), msgStructured.Broadcast) // Handle the message
-	}
+	go func() {
+		for msg := range receiveChan { // Receive messages from the channel
+			// Unmarshal the JSON message, json messsage structre is defined in exchange package
+			var msgStructured exchange.Msg
+			json.Unmarshal(msg, &msgStructured)
+			//Pass the recieved message into the mpc party
+			mpcParty.OnMsg(msgStructured.Message, uint16(msgStructured.From), msgStructured.Broadcast) // Handle the message
+		}
+	}()
 	wg.Wait() // Wait for all goroutines to finish
-	println("DKG completed in", time.Since(t1))
+
+	transport.DeleteFileData()
+	time.Sleep(2 * time.Second)
 
 	// We saved the key share in the file, we can read it from the file,
 	// Now we read the corresponding to party iD key share from the file,
@@ -172,34 +178,55 @@ func main() {
 	// 	return
 	// }
 
+	// share, err := mpcParty.GetShareData()
+	// if err != nil {
+	// 	fmt.Println("Failed to retrieve key share:", err)
+	// 	return
+	// }
+	// shareByte, _ := json.Marshal(share)
+	mpcParty.SetShareData(keyShare)
 	msgToSign := []byte(createSolanaTransaction()) // Create a new message to sign
-	digest := Digest(msgToSign)
+	// digest := Digest(msgToSign)
 
-	fmt.Println("Starting the signing process...") // Debug statement before signing
-	sign, err := mpcParty.Sign(context.Background(), digest)
-	if err != nil {
-		fmt.Println("Failed to sign message:", err)
-	} else {
-		fmt.Println("Signature:", sign)
-	}
+	wg.Add(1)
+	ctx := context.Background()
+	var sign []byte
+	mpcParty.Init(parties, threshold, transport.SendMsg)
+	go func() {
+		defer wg.Done()
+		fmt.Println("Starting the signing process...") // Debug statement before signing
+		sign, err = mpcParty.Sign(ctx, msgToSign)
+		if err != nil {
+			fmt.Println("Failed to sign message:", err)
+		} else {
+			fmt.Println("Signature:", sign)
+		}
+	}()
+
+	wg.Wait()
 	fmt.Println("Signing process completed.") // Debug statement after signing
 
-	sigSet := make(map[string]struct{})
-	for _, s := range sign {
-		sigSet[string(s)] = struct{}{}
-	}
+	// sigSet := make(map[string]struct{})
+	// for _, s := range sign {
+	// 	sigSet[string(s)] = struct{}{}
+	// }
 	pk, err := mpcParty.ThresholdPK()
 	if err != nil {
 		fmt.Println("Failed to get threshold public key:", err)
 	}
 	println("Threshold PK:", pk)
 
-	ed25519.Verify(pk, Digest(msgToSign), sign)
+	ed25519.Verify(pk, msgToSign, sign)
 
-	// type Signature struct {
-	// 	R *big.Int
-	// 	S *big.Int
-	// }
+	type Signature struct {
+		R *big.Int
+		S *big.Int
+	}
+	var sign_ Signature
+	json.Unmarshal(sign, &sign_)
+
+	fmt.Println("R:", sign_.R)
+	fmt.Println("S:", sign_.S)
 
 }
 
