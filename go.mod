@@ -1,4 +1,4 @@
-module teddsa
+module tilt-valid
 
 go 1.22.2
 

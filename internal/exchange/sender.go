@@ -9,7 +9,6 @@ import (
 )
 
 func (t *Transport) SendMsg(message []byte, broadcast bool, to uint16) {
-
 	from := t.partyID
 	if broadcast {
 		for _, party_ := range t.getParties() {

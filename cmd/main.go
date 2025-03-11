@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -12,38 +10,17 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	mpc "teddsa/eddsa"
-	"teddsa/exchange"
-
+	"tilt-valid/internal/exchange"
+	mpc "tilt-valid/internal/mpc"
+	"tilt-valid/pkg/utils"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 const threshold = 1
 
-// Validator represents a validator with an ID and name.
 type Validator struct {
 	ID   string
 	Name string
-}
-
-func Digest(in []byte) []byte {
-	h := sha256.New()
-	h.Write(in)
-	return h.Sum(nil)
-}
-
-func createSolanaTransaction() string {
-	randomBytes := make([]byte, 32)
-	_, err := rand.Read(randomBytes)
-	if err != nil {
-		fmt.Println("Failed to generate random bytes:", err)
-		return ""
-	}
-	hash := sha256.Sum256(randomBytes)
-
-	return fmt.Sprintf("%x", hash)
 }
 
 func loadValidators(filePath string) ([]Validator, error) {
@@ -70,25 +47,10 @@ func loadValidators(filePath string) ([]Validator, error) {
 	return validators, nil
 }
 
-func loadShareData(p *mpc.Party, partyID int) error {
-	fileName := fmt.Sprintf("localsavedata_eddsa%d", partyID-1) // Construct the file name
-	data, err := os.ReadFile(fileName)                          // Read the file content
-	if err != nil {
-		return fmt.Errorf("failed to read key share file %s: %w", fileName, err)
-	}
-
-	err = p.SetShareData(data)
-	if err != nil {
-		return fmt.Errorf("failed to set share data: %w", err)
-	}
-
-	fmt.Println("Successfully loaded and set share data for party", partyID)
-	return nil
-}
-
 func main() {
 	args := os.Args[1:]
 
+	// forces main function to wait until all webscokets are finished.
 	wg := sync.WaitGroup{}
 
 	if len(args) < 1 {
@@ -97,12 +59,13 @@ func main() {
 	}
 	id, _ := strconv.Atoi(args[0]) // Convert the first argument to an integer
 	fmt.Println("ARG:", id)
-	validators, err := loadValidators("validators.csv") // Load validators from the CSV file
+	validators, err := loadValidators("/Users/apple/Desktop/Tilt-Validator/data/validators.csv") // Load validators from the CSV file
 	if err != nil {
 		fmt.Println("Error loading validators:", err)
 	}
-	// to receive the incomming message from the other parties.
-	receiveChan := make(chan []byte, 10000) // Create a buffered channel to receive messages
+
+	receiveChan := make(chan []byte, 10000) // Create a buffered channel to receive messages //
+
 	// Create a list of party IDs
 	var parties []uint16
 	for i, _ := range validators[1:] {
@@ -113,7 +76,7 @@ func main() {
 	transport := exchange.NewTransport(id, parties) // Create a new transport for message exchange
 
 	// Create a new local mpc party. with correct partyID
-	mpcParty := mpc.NewParty(uint16(id), logger(validators[id].ID, "main")) // Create a new MPC party
+	mpcParty := mpc.NewParty(uint16(id), utils.Logger(validators[id].ID, "main")) // Create a new MPC party
 
 	// Initialize the MPC party, with the transport send message function
 	mpcParty.Init(parties, threshold, transport.SendMsg) // Initialize the MPC party
@@ -185,7 +148,7 @@ func main() {
 	// }
 	// shareByte, _ := json.Marshal(share)
 	mpcParty.SetShareData(keyShare)
-	msgToSign := []byte(createSolanaTransaction()) // Create a new message to sign
+	msgToSign := []byte(utils.GenerateTransactionHash()) // Create a new message to sign
 	// digest := Digest(msgToSign)
 
 	wg.Add(1)
@@ -227,12 +190,4 @@ func main() {
 
 	fmt.Println("R:", sign_.R)
 	fmt.Println("S:", sign_.S)
-
-}
-
-func logger(id string, testName string) mpc.Logger {
-	logConfig := zap.NewDevelopmentConfig()
-	logger, _ := logConfig.Build()
-	logger = logger.With(zap.String("t", testName)).With(zap.String("id", id))
-	return logger.Sugar()
 }
