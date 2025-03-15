@@ -14,17 +14,20 @@ import (
 	"github.com/decred/dcrd/dcrec/edwards/v2"
 )
 
-// Method to sign a message.
+// Sign generates a signature for the given message hash using threshold ECDSA.
 func (p *Party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 	if p.shareData == nil {
 		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
 	}
-	p.Logger.Debugf("Starting signing")
-	defer p.Logger.Debugf("Finished signing")
+
+	log.Println("[INFO] Starting signing process")
+	defer log.Println("[INFO] Signing process completed")
 	defer close(p.closeChan)
 
 	end := make(chan *common.SignatureData, 1)
 	msgToSign := big.NewInt(0).SetBytes(msgHash)
+
+	// Initialize local signing party
 	party := signing.NewLocalParty(msgToSign, p.params, *p.shareData, p.out, end)
 
 	var endWG sync.WaitGroup
@@ -32,9 +35,8 @@ func (p *Party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 
 	go func() {
 		defer endWG.Done()
-		err := party.Start()
-		if err != nil {
-			p.Logger.Errorf("Failed signing: %v", err)
+		if err := party.Start(); err != nil {
+			log.Printf("[ERROR] Failed signing: %v\n", err)
 		}
 	}()
 
@@ -44,33 +46,37 @@ func (p *Party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("signing timed out: %w", ctx.Err())
+
 		case sigOut := <-end:
+			// Validate the signed message
 			if !bytes.Equal(sigOut.M, msgToSign.Bytes()) {
-				return nil, fmt.Errorf("message we requested to sign is %s but actual message signed is %s",
+				return nil, fmt.Errorf("message mismatch: expected %s, got %s",
 					base64.StdEncoding.EncodeToString(msgHash),
 					base64.StdEncoding.EncodeToString(sigOut.M))
 			}
+
+			// Extract R and S components of the signature
 			var sig struct {
 				R, S *big.Int
 			}
-			sig.R = big.NewInt(0)
-			sig.S = big.NewInt(0)
-			sig.R.SetBytes(sigOut.R)
-			sig.S.SetBytes(sigOut.S)
+			sig.R = new(big.Int).SetBytes(sigOut.R)
+			sig.S = new(big.Int).SetBytes(sigOut.S)
 
 			s := &edwards.Signature{R: sig.R, S: sig.S}
-			log.Println("Signature Generated\n\n", "R:", sig.R.Text(16), "\n S:", sig.S.Text(16), "\n\n ")
+			log.Printf("[INFO] Signature generated:\n  R: %s\n  S: %s\n", sig.R.Text(16), sig.S.Text(16))
 			return s.Serialize(), nil
+
 		case msg := <-p.in:
+			// Process incoming messages
 			raw, routing, err := msg.WireBytes()
 			if err != nil {
-				p.Logger.Warnf("Received error when serializing message: %v", err)
+				log.Printf("[WARNING] Error serializing message: %v\n", err)
 				continue
 			}
-			p.Logger.Debugf("%s Got message from %s", p.Id.Id, routing.From.Id)
-			ok, err := party.UpdateFromBytes(raw, routing.From, routing.IsBroadcast)
-			if !ok {
-				p.Logger.Warnf("Received error when updating party: %v", err.Error())
+
+			log.Printf("[INFO] Received message from %s\n", routing.From.Id)
+			if ok, err := party.UpdateFromBytes(raw, routing.From, routing.IsBroadcast); !ok {
+				log.Printf("[WARNING] Error updating party state: %v\n", err)
 				continue
 			}
 		}

@@ -234,7 +234,6 @@ func (p *Party) sendMessages() {
 // Method to save local party save data to a file.
 func (p *Party) SaveLocalPartySaveData(shareData []byte) {
 	WriteToFile("localsavedata_eddsa"+strconv.Itoa(p.ID().Index), shareData)
-	p.Logger.Debugf("Saved Data locally")
 }
 
 // Method to load local party save data from a file.
@@ -297,7 +296,6 @@ func ReadFromFile(filename string) ([]byte, error) {
 
 // Method to get share data from a file.
 func (p *Party) GetShareData() (*keygen.LocalPartySaveData, error) {
-	fmt.Println("------------------------->>>>>>>ID:", p.ID().Id)
 	fileName := fmt.Sprintf("localsavedata_eddsa%d", p.ID().Index)
 	file, err := os.Open(fileName)
 	if err != nil {

@@ -16,11 +16,11 @@ func NewTransport(partyID int, parties []uint16) *Transport {
 }
 
 func (t *Transport) GetFileName() string {
-	return "/Users/apple/Documents/GitHub/tilt-validator-main/internal/Transport" + strconv.Itoa(t.partyID) + ".csv"
+	return "/Users/apple/Documents/GitHub/tilt-validator-main/internal/Transport/" + strconv.Itoa(t.partyID) + ".csv"
 }
 
 func (t *Transport) GetReceiverFileName(id string) string {
-	return "/Users/apple/Documents/GitHub/tilt-validator-main/internal/Transport" + id + ".csv"
+	return "/Users/apple/Documents/GitHub/tilt-validator-main/internal/Transport/" + id + ".csv"
 }
 
 func (t *Transport) getParties() []uint16 {
