@@ -1,8 +1,10 @@
 package exchange
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
+	"tilt-valid/cmd/config"
 )
 
 type Transport struct {
@@ -16,11 +18,21 @@ func NewTransport(partyID int, parties []uint16) *Transport {
 }
 
 func (t *Transport) GetFileName() string {
-	return "/Users/apple/Documents/GitHub/tilt-validator-main/internal/Transport/" + strconv.Itoa(t.partyID) + ".csv"
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println("error in loading config")
+	}
+	path := cfg.TransportPath
+	return path + strconv.Itoa(t.partyID) + ".csv"
 }
 
 func (t *Transport) GetReceiverFileName(id string) string {
-	return "/Users/apple/Documents/GitHub/tilt-validator-main/internal/Transport/" + id + ".csv"
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println("error in loading config")
+	}
+	path := cfg.TransportPath
+	return path + id + ".csv"
 }
 
 func (t *Transport) getParties() []uint16 {

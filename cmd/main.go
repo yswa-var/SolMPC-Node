@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"tilt-valid/cmd/config"
 	"tilt-valid/internal/exchange"
 	mpc "tilt-valid/internal/mpc"
 	"tilt-valid/utils"
@@ -206,7 +207,13 @@ func main() {
 	id, _ := strconv.Atoi(args[0])
 	separator(fmt.Sprintf("Starting Validator ID: %d", id))
 
-	validatorsFilePath := filepath.Join("/Users/apple/Documents/GitHub/tilt-validator-main/data", "validators.csv")
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println("error in loading config")
+	}
+	path := cfg.ValidatorPath
+
+	validatorsFilePath := filepath.Join(path, "validators.csv")
 	validators, err := loadValidators(validatorsFilePath)
 	if err != nil {
 		logError(fmt.Sprintf("Error loading validators: %v", err))
@@ -293,26 +300,26 @@ func main() {
 	// VRF logic implementation
 	separator("VRF-based Validator Selection")
 
-	// Step 1: Generate VRF hash for this validator
+	// Generate VRF hash for this validator
 	logInfo("Generating VRF hash...")
 	vrfHash := generateVRFHash()
 	logInfo(fmt.Sprintf("Generated VRF hash: %s", vrfHash.String()))
 
-	// Step 2: Update the VRF hash in the CSV file
+	// Update the VRF hash in the CSV file
 	updateVRFHash(id, vrfHash, validatorsFilePath)
 
-	// Step 3: Wait for all validators to update their VRF hashes
+	// Wait for all validators to update their VRF hashes
 	logInfo("Waiting for other validators to update their VRF hashes...")
 	time.Sleep(5 * time.Second)
 
-	// Step 4: Reload validators to get updated VRF hashes
+	// Reload validators to get updated VRF hashes
 	updatedValidators, err := loadValidators(validatorsFilePath)
 	if err != nil {
 		logError(fmt.Sprintf("Error reloading validators: %v", err))
 		return
 	}
 
-	// Step 5: Select a validator based on combined VRF hashes
+	// Select a validator based on combined VRF hashes
 	selectedValidator, err := selectValidator(updatedValidators)
 	if err != nil {
 		logError(fmt.Sprintf("Error selecting validator: %v", err))
