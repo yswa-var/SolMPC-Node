@@ -81,4 +81,5 @@ func (p *Party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 			}
 		}
 	}
+
 }

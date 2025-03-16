@@ -14,7 +14,7 @@ type Config struct {
 }
 
 func LoadConfig() (*Config, error) {
-	err := godotenv.Load("/Users/apple/Documents/GitHub/tilt-validator-main/.env")
+	err := godotenv.Load("/Users/peerfaheem/Documents/GitHub/tilt-validator/.env")
 	if err != nil {
 		log.Fatalf("Error loading .env file")
 		return nil, err
