@@ -7,17 +7,22 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
 
 	"tilt-valid/cmd/config"
+	"tilt-valid/internal/distribution"
 	"tilt-valid/internal/exchange"
 	mpc "tilt-valid/internal/mpc"
 	"tilt-valid/utils"
+
+	"github.com/gagliardetto/solana-go"
 )
 
 const threshold = 2
@@ -66,6 +71,7 @@ func separator(title string) {
 }
 
 func loadValidators(filePath string) ([]Validator, error) {
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %v", err)
@@ -266,8 +272,130 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	// Signing process
+	td, err := distribution.NewTiltDistribution("http://127.0.0.1:8899")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sender, _ := solana.PrivateKeyFromSolanaKeygenFile("/Users/apple/Desktop/tilt/tilt/sender.json")
+	tiltMint := solana.MustPublicKeyFromBase58("F9VF1XvPmfuXW95s6WkP3gL2sARZy1EAA5HJn5GeJcG1")
+	recipient1Token := solana.MustPublicKeyFromBase58("HqcqSHMsek4ojuh57arkwvT2aiwPhB4ucscU8DBrxCEC") // Replace
+	recipient2Token := solana.MustPublicKeyFromBase58("4DM24i3wrVYrh4NmVStd3REyCW5u5KWcBWXqfKZQiBNj") // Replace
+
+	// Tilt creation and synchronization
+	flagFilePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/create-tilt-flag.txt"
+	tiltDataFile := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/current-tilt-data.txt"
+	var distributions map[solana.PublicKey]uint64
+
+	if id == 1 { // Leader validator
+		flagFile, err := os.ReadFile(flagFilePath)
+		flagValue := 0
+		if err == nil {
+			flagValue, _ = strconv.Atoi(string(flagFile))
+		}
+		if flagValue == 0 {
+			// Create tilt
+			t := utils.CreateTilt(sender.PublicKey(), recipient1Token, recipient2Token, true)
+			_, err := utils.FetchTiltData(t)
+			if err != nil {
+				logError(fmt.Sprintf("Failed to fetch tilt data: %v", err))
+				return
+			}
+			// Flatten tilt into distributions
+			distributions, err = distribution.FlattenTilt(t, 1000000000) // 1 token with 9 decimals
+			if err != nil {
+				logError(fmt.Sprintf("Failed to flatten tilt: %v", err))
+				return
+			}
+			// Convert to map[string]uint64 for JSON
+			distStr := make(map[string]uint64)
+			for k, v := range distributions {
+				distStr[k.String()] = v
+			}
+			// Save to file
+			distJSON, err := json.Marshal(distStr)
+			if err != nil {
+				logError(fmt.Sprintf("Failed to marshal distributions: %v", err))
+				return
+			}
+			err = os.WriteFile(tiltDataFile, distJSON, 0644)
+			if err != nil {
+				logError(fmt.Sprintf("Failed to write distributions: %v", err))
+				return
+			}
+			// Update flag
+			err = os.WriteFile(flagFilePath, []byte("1"), 0644)
+			if err != nil {
+				logError(fmt.Sprintf("Failed to update flag: %v", err))
+				return
+			}
+			logSuccess("Tilt created and distributions saved by leader")
+		}
+	} else { // Other validators
+		for {
+			flagFile, err := os.ReadFile(flagFilePath)
+			if err != nil {
+				logError(fmt.Sprintf("Failed to read flag file: %v", err))
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			flagValue, err := strconv.Atoi(string(flagFile))
+			if err != nil {
+				logError(fmt.Sprintf("Invalid flag value: %v", err))
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			if flagValue == 1 {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	// All validators read the distributions
+	distBytes, err := os.ReadFile(tiltDataFile)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to read tilt data: %v", err))
+		return
+	}
+	var distStr map[string]uint64
+	fmt.Printf("distBytes: %s\n", distBytes)
+	fmt.Printf("distStr: %v\n", distStr)
+	err = json.Unmarshal(distBytes, &distStr)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to unmarshal distributions: %v", err))
+		// ERROR] Failed to unmarshal distributions: invalid character 'T' looking for beginning of
+		return
+	}
+	distributions = make(map[solana.PublicKey]uint64)
+	for k, v := range distStr {
+		pk, err := solana.PublicKeyFromBase58(k)
+		if err != nil {
+			logWarning(fmt.Sprintf("Invalid public key in distributions: %s", k))
+			continue
+		}
+		distributions[pk] = v
+	}
+	logInfo("Distributions loaded:")
+	for k, v := range distributions {
+		logInfo(fmt.Sprintf("  %s: %d lamports", k.String(), v))
+	}
+
 	mpcParty.SetShareData(keyShare)
-	msgToSign := []byte(utils.GenerateTransactionHash())
+	sortedDist := make(map[string]uint64)
+	var keys []string
+	for k := range distStr {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		sortedDist[k] = distStr[k]
+	}
+	msgToSign, err := json.Marshal(sortedDist)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to marshal msgToSign: %v", err))
+		return
+	}
 	digestMsg := mpc.Digest(msgToSign)
 
 	separator("Signing Process")
@@ -289,6 +417,9 @@ func main() {
 	}()
 	wg.Wait()
 	logInfo("Signing process completed.")
+
+	// updating flag to: tilt complete.
+	utils.UpdateTiltCounter(0)
 
 	pk, err := mpcParty.ThresholdPK()
 	if err != nil {
@@ -318,8 +449,6 @@ func main() {
 		logError(fmt.Sprintf("Error reloading validators: %v", err))
 		return
 	}
-
-	// Select a validator based on combined VRF hashes
 	selectedValidator, err := selectValidator(updatedValidators)
 	if err != nil {
 		logError(fmt.Sprintf("Error selecting validator: %v", err))
@@ -329,6 +458,16 @@ func main() {
 			separator("Signature Verification")
 			if ed25519.Verify(pk, digestMsg, sign) {
 				logSuccess("✅ Signature verification successful!")
+				sig, err := td.Distribute(&sender, tiltMint, distributions)
+				if err != nil {
+					logError(fmt.Sprintf("Failed to distribute: %v", err))
+					return
+				}
+				logSuccess(fmt.Sprintf("Transaction Signature: %s", sig))
+				logInfo("Final Distributions:")
+				for k, v := range distributions {
+					logInfo(fmt.Sprintf("  %s: %d lamports", k.String(), v))
+				}
 			} else {
 				logError("❌ Signature verification failed!")
 			}
