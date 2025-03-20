@@ -1,169 +1,151 @@
 package distribution
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"tilt-valid/utils"
-
-	"github.com/gagliardetto/solana-go"
-	"github.com/gagliardetto/solana-go/rpc"
 )
 
-// TiltDistribution manages payment distribution
-type TiltDistribution struct {
-	client *rpc.Client
+// DistributionData represents the node data with float64 for amounts
+type DistributionData struct {
+	Amount        float64   `json:"amount"`
+	BusinessRules []float64 `json:"business_rules"`
+	ID            int       `json:"id"`
+	Receiver      []string  `json:"receiver"`
+	Sender        string    `json:"sender"`
+	Subtilt       []int     `json:"subtilt"`
 }
 
-// NewTiltDistribution initializes a new distributor
-func NewTiltDistribution(endpoint string) (*TiltDistribution, error) {
-	client := rpc.New(endpoint)
-	// Test the endpoint
-	_, err := client.GetVersion(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("RPC endpoint %s unavailable: %v", endpoint, err)
-	}
-	return &TiltDistribution{client: client}, nil
+// Allocation defines the output format
+type Allocation struct {
+	Receiver string
+	Amount   float64
 }
 
-// Distribute executes the distribution on-chain
-func (td *TiltDistribution) Distribute(sender *solana.PrivateKey, tiltMint solana.PublicKey, distributions map[solana.PublicKey]uint64) (solana.Signature, error) {
-	programID := solana.MustPublicKeyFromBase58("8ctzNPg4MzNDu3A8BxpBmP34NCEH5emAtgtESuGq3tfN")
-	distributionAccount, bump, err := solana.FindProgramAddress([][]byte{[]byte("distribution")}, programID)
-	if err != nil {
-		return solana.Signature{}, fmt.Errorf("failed to derive distribution account: %v", err)
+// Distribution parses input into DistributionData
+func Distribution(distBytes map[string]any) (DistributionData, error) {
+	receivers, ok := distBytes["receiver"].([]string)
+	if !ok {
+		return DistributionData{}, fmt.Errorf("invalid receiver: expected []string")
 	}
-	senderTokenAccount := solana.MustPublicKeyFromBase58("4gVrPcoM9iidqcvQR1ZXNy2DM3B6Lx647xTY1MNLudKY")
-
-	recent, err := td.client.GetLatestBlockhash(context.Background(), rpc.CommitmentFinalized)
-	if err != nil {
-		return solana.Signature{}, fmt.Errorf("failed to get recent blockhash: %v", err)
+	senderStr, ok := distBytes["sender"].(string)
+	if !ok {
+		return DistributionData{}, fmt.Errorf("invalid sender: expected string")
 	}
-	fmt.Println("------.....--------....--------")
-	fmt.Println(recent)
-
-	// Initialize distribution account
-	initData := append([]byte{0}, bump)
-	initAccounts := []*solana.AccountMeta{
-		{PublicKey: distributionAccount, IsSigner: false, IsWritable: true},
-		{PublicKey: tiltMint, IsSigner: false, IsWritable: false},
-		{PublicKey: sender.PublicKey(), IsSigner: true, IsWritable: true},
-		{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
-	}
-	initInstr := solana.NewInstruction(programID, initAccounts, initData)
-
-	var instructions []solana.Instruction
-	instructions = append(instructions, initInstr)
-
-	for recipientToken, amount := range distributions {
-		discriminator := sha256.Sum256([]byte("global:distribute_tilt"))
-		data := make([]byte, 8+32+8)
-		copy(data[0:8], discriminator[:8])
-		copy(data[8:40], recipientToken[:])
-		binary.LittleEndian.PutUint64(data[40:48], amount)
-		accounts := []*solana.AccountMeta{
-			{PublicKey: distributionAccount, IsSigner: false, IsWritable: false},
-			{PublicKey: tiltMint, IsSigner: false, IsWritable: false},
-			{PublicKey: senderTokenAccount, IsSigner: false, IsWritable: true},
-			{PublicKey: recipientToken, IsSigner: false, IsWritable: true},
-			{PublicKey: sender.PublicKey(), IsSigner: true, IsWritable: false},
-			{PublicKey: solana.TokenProgramID, IsSigner: false, IsWritable: false},
-			{PublicKey: solana.SystemProgramID, IsSigner: false, IsWritable: false},
+	amount, ok := distBytes["amount"].(float64)
+	if !ok {
+		// Try int conversion as a fallback
+		if amtInt, ok := distBytes["amount"].(int); ok {
+			amount = float64(amtInt)
+		} else {
+			return DistributionData{}, fmt.Errorf("invalid amount: expected float64")
 		}
-		instructions = append(instructions, solana.NewInstruction(programID, accounts, data))
 	}
-
-	tx, err := solana.NewTransaction(instructions, recent.Value.Blockhash, solana.TransactionPayer(sender.PublicKey()))
-	if err != nil {
-		return solana.Signature{}, fmt.Errorf("failed to create transaction: %v", err)
-	}
-
-	// Serialize transaction for hash
-	txBytes, err := tx.MarshalBinary()
-	if err != nil {
-		return solana.Signature{}, fmt.Errorf("failed to serialize transaction: %v", err)
-	}
-	hash := sha256.Sum256(txBytes)
-	txHash := hex.EncodeToString(hash[:])
-	fmt.Printf("Transaction Hash for Validation: %s\n", txHash)
-
-	// Sign the transaction
-	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
-		if key.Equals(sender.PublicKey()) {
-			return sender
-		}
-		return nil
-	})
-	if err != nil {
-		return solana.Signature{}, fmt.Errorf("failed to sign transaction: %v", err)
-	}
-
-	// Send the transaction with verbose error handling
-	sig, err := td.client.SendTransaction(context.Background(), tx)
-	if err != nil {
-		return solana.Signature{}, fmt.Errorf("failed to send transaction: %v", err)
-	}
-
-	return sig, nil
-}
-
-// flattenTilt recursively flattens the tilt tree into a payment map
-func FlattenTilt(t utils.Tilt, totalAmount uint64) (map[solana.PublicKey]uint64, error) {
-	distributions := make(map[solana.PublicKey]uint64)
-	if len(t.SubTilts) == 0 {
-		if len(t.Recipients) == 0 {
-			return nil, fmt.Errorf("no recipients in leaf tilt %s", t.Name)
-		}
-		for _, recipient := range t.Recipients {
-			distributions[recipient] = totalAmount / uint64(len(t.Recipients))
-		}
-		return distributions, nil
-	}
-
-	weightSum := uint8(0)
-	for _, w := range t.Weights {
-		weightSum += w
-	}
-	if weightSum != 100 {
-		return nil, fmt.Errorf("weights must sum to 100 in %s, got %d", t.Name, weightSum)
-	}
-
-	subTiltWeight := t.Weights[0]
-	subTiltAmount := totalAmount * uint64(subTiltWeight) / 100
-	localAmount := totalAmount - subTiltAmount
-
-	subTiltCount := len(t.SubTilts)
-	if subTiltCount > 0 {
-		perSubTiltAmount := subTiltAmount / uint64(subTiltCount)
-		for _, subTilt := range t.SubTilts {
-			subDist, err := FlattenTilt(subTilt, perSubTiltAmount)
-			if err != nil {
-				return nil, err
+	businessRules, ok := distBytes["business_rules"].([]float64)
+	if !ok {
+		// Try []int conversion as a fallback
+		if brInt, ok := distBytes["business_rules"].([]int); ok {
+			businessRules = make([]float64, len(brInt))
+			for i, v := range brInt {
+				businessRules[i] = float64(v)
 			}
-			for k, v := range subDist {
-				distributions[k] = v
-			}
+		} else {
+			return DistributionData{}, fmt.Errorf("invalid business_rules: expected []float64")
 		}
 	}
-
-	if len(t.Recipients) > 0 {
-		for _, recipient := range t.Recipients {
-			distributions[recipient] = localAmount / uint64(len(t.Recipients))
-		}
+	id, ok := distBytes["id"].(int)
+	if !ok {
+		return DistributionData{}, fmt.Errorf("invalid id: expected int")
+	}
+	subtilt, ok := distBytes["subtilt"].([]int)
+	if !ok {
+		return DistributionData{}, fmt.Errorf("invalid subtilt: expected []int")
 	}
 
-	return distributions, nil
+	return DistributionData{
+		Amount:        amount,
+		BusinessRules: businessRules,
+		ID:            id,
+		Receiver:      receivers,
+		Sender:        senderStr,
+		Subtilt:       subtilt,
+	}, nil
 }
 
-// simulateValidator runs the validator simulation script
-// func simulateValidator(txHash string) (string, error) {
-// 	cmd := exec.Command("bash", "../validator_sim.sh") // Adjust path
-// 	cmd.Env = append(cmd.Env, fmt.Sprintf("TX_HASH=%s", txHash))
-// 	output, err := cmd.CombinedOutput()
-// 	if err != nil {
-// 		return "", fmt.Errorf("validator simulation failed: %v, output: %s", err, output)
-// 	}
-// 	return string(output), nil
-// }
+// AllocateAmounts distributes amounts across the hierarchy
+func AllocateAmounts(data DistributionData) ([]Allocation, error) {
+	// Handle empty BusinessRules for leaf nodes
+	if len(data.BusinessRules) == 0 {
+		if len(data.Subtilt) == 0 && len(data.Receiver) > 0 {
+			data.BusinessRules = []float64{100.0} // Default for leaf node with receivers
+		} else {
+			return nil, fmt.Errorf("invalid business rules: empty rules not allowed for node ID %d with %d subtilts", data.ID, len(data.Subtilt))
+		}
+	}
+
+	// // Validate business rules length
+	// if len(data.BusinessRules) != len(data.Subtilt)+1 {
+	//     return nil, fmt.Errorf("invalid business rules: length mismatch for node ID %d, expected %d, got %d", data.ID, len(data.Subtilt)+1, len(data.BusinessRules))
+	// }
+
+	// Validate total percentage
+	totalPercentage := 0.0
+	for _, percentage := range data.BusinessRules {
+		if percentage < 0 {
+			return nil, fmt.Errorf("invalid business rules: negative percentage %f for node ID %d", percentage, data.ID)
+		}
+		totalPercentage += percentage
+	}
+	if totalPercentage != 100.0 {
+		return nil, fmt.Errorf("invalid business rules: total percentage must be 100 for node ID %d, got %f", data.ID, totalPercentage)
+	}
+
+	// Validate receiver allocation
+	if len(data.Receiver) == 0 && data.BusinessRules[0] != 0 {
+		return nil, fmt.Errorf("invalid business rules: cannot allocate %f%% to non-existent receivers for node ID %d", data.BusinessRules[0], data.ID)
+	}
+
+	// Use a map to accumulate amounts
+	resultMap := make(map[string]float64)
+
+	// Allocate to receivers
+	receiverAmount := data.Amount * (data.BusinessRules[0] / 100.0)
+	if len(data.Receiver) > 0 {
+		share := receiverAmount / float64(len(data.Receiver))
+		for _, receiver := range data.Receiver {
+			resultMap[receiver] += share
+		}
+	}
+
+	// Allocate to sub-tilts
+	for i, subID := range data.Subtilt {
+		subAmount := data.Amount * (data.BusinessRules[i+1] / 100.0)
+		subData, err := utils.ReadTiltDataByID(subID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read sub-tilt data for ID %d: %w", subID, err)
+		}
+
+		// Construct subDistData with type safety
+		subDistData, err := Distribution(subData)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sub-tilt data for ID %d: %w", subID, err)
+		}
+		subDistData.Amount += subAmount // Add parent's contribution
+
+		// Recursive call
+		subResult, err := AllocateAmounts(subDistData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to allocate amounts for sub-tilt ID %d: %w", subID, err)
+		}
+		for _, alloc := range subResult {
+			resultMap[alloc.Receiver] += alloc.Amount
+		}
+	}
+
+	// Convert map to list
+	var allocations []Allocation
+	for receiver, amount := range resultMap {
+		allocations = append(allocations, Allocation{Receiver: receiver, Amount: amount})
+	}
+
+	return allocations, nil
+}
