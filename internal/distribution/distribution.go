@@ -41,8 +41,6 @@ func (td *TiltDistribution) Distribute(sender *solana.PrivateKey, tiltMint solan
 	if err != nil {
 		return solana.Signature{}, fmt.Errorf("failed to get recent blockhash: %v", err)
 	}
-	fmt.Println("------.....--------....--------")
-	fmt.Println(recent)
 
 	// Initialize distribution account
 	initData := append([]byte{0}, bump)
@@ -87,6 +85,7 @@ func (td *TiltDistribution) Distribute(sender *solana.PrivateKey, tiltMint solan
 	}
 	hash := sha256.Sum256(txBytes)
 	txHash := hex.EncodeToString(hash[:])
+
 	fmt.Printf("Transaction Hash for Validation: %s\n", txHash)
 
 	// Sign the transaction

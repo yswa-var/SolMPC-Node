@@ -278,7 +278,7 @@ func main() {
 	}
 
 	sender, _ := solana.PrivateKeyFromSolanaKeygenFile("/Users/apple/Desktop/tilt/tilt/sender.json")
-	tiltMint := solana.MustPublicKeyFromBase58("F9VF1XvPmfuXW95s6WkP3gL2sARZy1EAA5HJn5GeJcG1")
+	tiltMint := solana.MustPublicKeyFromBase58("2BiJPWGNkyPRMJHKGS4R66ipje6HCgr3GZVMHZtZ3Wpu")
 	recipient1Token := solana.MustPublicKeyFromBase58("HqcqSHMsek4ojuh57arkwvT2aiwPhB4ucscU8DBrxCEC") // Replace
 	recipient2Token := solana.MustPublicKeyFromBase58("4DM24i3wrVYrh4NmVStd3REyCW5u5KWcBWXqfKZQiBNj") // Replace
 
