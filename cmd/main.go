@@ -6,13 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,9 +22,14 @@ import (
 	"tilt-valid/internal/exchange"
 	mpc "tilt-valid/internal/mpc"
 	"tilt-valid/utils"
-
-	"github.com/gagliardetto/solana-go"
 )
+
+// Define a flag for selecting the tilt type
+var tiltType string
+
+func init() {
+	flag.StringVar(&tiltType, "tilt-type", "two_subtilts", "Type of tilt to create (simple, one_subtilt, two_subtilts, nested)")
+}
 
 const threshold = 2
 
@@ -205,13 +211,22 @@ func selectValidator(validators []Validator) (int, error) {
 func main() {
 	args := os.Args[1:]
 	wg := sync.WaitGroup{}
+	flag.Parse()
 
 	if len(args) < 1 {
-		logError("Usage: go run main.go <validator_id>")
+		logError("Usage: go run main.go <validator_id> [--tilt-type=<tilt_type>]")
 		return
 	}
 	id, _ := strconv.Atoi(args[0])
 	separator(fmt.Sprintf("Starting Validator ID: %d", id))
+
+	// Check for tilt-type flag in args
+	for _, arg := range args {
+		if len(arg) > 11 && arg[:11] == "--tilt-type=" {
+			tiltType = arg[11:]
+			break
+		}
+	}
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -270,116 +285,60 @@ func main() {
 	logInfo(fmt.Sprintf("DKG completed in %.2f seconds", time.Since(startTime).Seconds()))
 	transport.DeleteFileData()
 	time.Sleep(2 * time.Second)
-
-	// Signing process
-	td, err := distribution.NewTiltDistribution("http://127.0.0.1:8899")
-	if err != nil {
-		log.Fatal(err)
+	flag, _ := utils.ReadTiltCounter()
+	if flag == 0 {
+		senderKey := sha256.Sum256(make([]byte, ed25519.PublicKeySize))
+		senderKeyStr := fmt.Sprintf("%x", senderKey)
+		utils.GetTestTilt(tiltType, senderKeyStr)
+		utils.UpdateTiltCounter(1)
 	}
-
-	sender, _ := solana.PrivateKeyFromSolanaKeygenFile("/Users/apple/Desktop/tilt/tilt/sender.json")
-	tiltMint := solana.MustPublicKeyFromBase58("2BiJPWGNkyPRMJHKGS4R66ipje6HCgr3GZVMHZtZ3Wpu")
-	recipient1Token := solana.MustPublicKeyFromBase58("HqcqSHMsek4ojuh57arkwvT2aiwPhB4ucscU8DBrxCEC") // Replace
-	recipient2Token := solana.MustPublicKeyFromBase58("4DM24i3wrVYrh4NmVStd3REyCW5u5KWcBWXqfKZQiBNj") // Replace
-
-	// Tilt creation and synchronization
-	flagFilePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/create-tilt-flag.txt"
-	tiltDataFile := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/current-tilt-data.txt"
-	var distributions map[solana.PublicKey]uint64
-
-	if id == 1 { // Leader validator
-		flagFile, err := os.ReadFile(flagFilePath)
-		flagValue := 0
-		if err == nil {
-			flagValue, _ = strconv.Atoi(string(flagFile))
-		}
-		if flagValue == 0 {
-			// Create tilt
-			t := utils.CreateTilt(sender.PublicKey(), recipient1Token, recipient2Token, true)
-			_, err := utils.FetchTiltData(t)
-			if err != nil {
-				logError(fmt.Sprintf("Failed to fetch tilt data: %v", err))
-				return
-			}
-			// Flatten tilt into distributions
-			distributions, err = distribution.FlattenTilt(t, 1000000000) // 1 token with 9 decimals
-			if err != nil {
-				logError(fmt.Sprintf("Failed to flatten tilt: %v", err))
-				return
-			}
-			// Convert to map[string]uint64 for JSON
-			distStr := make(map[string]uint64)
-			for k, v := range distributions {
-				distStr[k.String()] = v
-			}
-			// Save to file
-			distJSON, err := json.Marshal(distStr)
-			if err != nil {
-				logError(fmt.Sprintf("Failed to marshal distributions: %v", err))
-				return
-			}
-			err = os.WriteFile(tiltDataFile, distJSON, 0644)
-			if err != nil {
-				logError(fmt.Sprintf("Failed to write distributions: %v", err))
-				return
-			}
-			// Update flag
-			err = os.WriteFile(flagFilePath, []byte("1"), 0644)
-			if err != nil {
-				logError(fmt.Sprintf("Failed to update flag: %v", err))
-				return
-			}
-			logSuccess("Tilt created and distributions saved by leader")
-		}
-	} else { // Other validators
-		for {
-			flagFile, err := os.ReadFile(flagFilePath)
-			if err != nil {
-				logError(fmt.Sprintf("Failed to read flag file: %v", err))
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			flagValue, err := strconv.Atoi(string(flagFile))
-			if err != nil {
-				logError(fmt.Sprintf("Invalid flag value: %v", err))
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			if flagValue == 1 {
-				break
-			}
-			time.Sleep(1 * time.Second)
-		}
-	}
+	time.Sleep(2 * time.Second)
 
 	// All validators read the distributions
-	distBytes, err := os.ReadFile(tiltDataFile)
+	// Read the tilt data for the given validator ID
+	distBytes, err := utils.ReadTiltDataByID(1)
 	if err != nil {
-		logError(fmt.Sprintf("Failed to read tilt data: %v", err))
+		logError(fmt.Sprintf("Error reading tilt data: %v", err))
 		return
 	}
-	var distStr map[string]uint64
-	fmt.Printf("distBytes: %s\n", distBytes)
-	fmt.Printf("distStr: %v\n", distStr)
-	err = json.Unmarshal(distBytes, &distStr)
+	currentTilt, err := distribution.Distribution(distBytes)
+	flattenData, err := distribution.AllocateAmounts(currentTilt)
 	if err != nil {
-		logError(fmt.Sprintf("Failed to unmarshal distributions: %v", err))
-		// ERROR] Failed to unmarshal distributions: invalid character 'T' looking for beginning of
+		logError(fmt.Sprintf("Failed to distribute: %v", err))
 		return
 	}
-	distributions = make(map[solana.PublicKey]uint64)
-	for k, v := range distStr {
-		pk, err := solana.PublicKeyFromBase58(k)
-		if err != nil {
-			logWarning(fmt.Sprintf("Invalid public key in distributions: %s", k))
-			continue
+	// Save flattenData to distribution-dump.csv
+	dumpFilePath := filepath.Join("/Users/yash/Downloads/exercises/tilt-validator/utils/", "distribution-dump.csv")
+	dumpFile, err := os.Create(dumpFilePath)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to create distribution-dump.csv file: %v", err))
+		return
+	}
+	defer dumpFile.Close()
+
+	writer := csv.NewWriter(dumpFile)
+	defer writer.Flush()
+
+	// Write headers
+	headers := []string{"ReceiverID", "Amount"}
+	if err := writer.Write(headers); err != nil {
+		logError(fmt.Sprintf("Failed to write headers to CSV file: %v", err))
+		return
+	}
+
+	// Write data
+	for receiverID, amount := range flattenData {
+		record := []string{strconv.Itoa(receiverID), fmt.Sprintf("%f", amount)}
+		if err := writer.Write(record); err != nil {
+			logError(fmt.Sprintf("Failed to write record to CSV file: %v", err))
+			return
 		}
-		distributions[pk] = v
 	}
-	logInfo("Distributions loaded:")
-	for k, v := range distributions {
-		logInfo(fmt.Sprintf("  %s: %d lamports", k.String(), v))
-	}
+
+	logSuccess("Flatten data saved to distribution-dump.csv")
+	// Convert flattenData to a map[string]interface{} for msgToSign
+
+	distStr := make(map[string]uint64)
 
 	mpcParty.SetShareData(keyShare)
 	sortedDist := make(map[string]uint64)
@@ -418,9 +377,6 @@ func main() {
 	wg.Wait()
 	logInfo("Signing process completed.")
 
-	// updating flag to: tilt complete.
-	utils.UpdateTiltCounter(0)
-
 	pk, err := mpcParty.ThresholdPK()
 	if err != nil {
 		logError("Failed to get threshold public key")
@@ -430,6 +386,7 @@ func main() {
 
 	// VRF logic implementation
 	separator("VRF-based Validator Selection")
+	fmt.Println("********Tilt completed********")
 
 	// Generate VRF hash for this validator
 	logInfo("Generating VRF hash...")
@@ -449,6 +406,7 @@ func main() {
 		logError(fmt.Sprintf("Error reloading validators: %v", err))
 		return
 	}
+	// updating flag to: tilt complete.
 	selectedValidator, err := selectValidator(updatedValidators)
 	if err != nil {
 		logError(fmt.Sprintf("Error selecting validator: %v", err))
@@ -458,16 +416,6 @@ func main() {
 			separator("Signature Verification")
 			if ed25519.Verify(pk, digestMsg, sign) {
 				logSuccess("✅ Signature verification successful!")
-				sig, err := td.Distribute(&sender, tiltMint, distributions)
-				if err != nil {
-					logError(fmt.Sprintf("Failed to distribute: %v", err))
-					return
-				}
-				logSuccess(fmt.Sprintf("Transaction Signature: %s", sig))
-				logInfo("Final Distributions:")
-				for k, v := range distributions {
-					logInfo(fmt.Sprintf("  %s: %d lamports", k.String(), v))
-				}
 			} else {
 				logError("❌ Signature verification failed!")
 			}
@@ -475,4 +423,17 @@ func main() {
 			logInfo(fmt.Sprintf("Validator ID: %d was selected for verification", selectedValidator))
 		}
 	}
+	utils.UpdateTiltCounter(0)
+	// Clear the content of the tiltdb.csv file
+	tiltDBFilePath := filepath.Join("/Users/yash/Downloads/exercises/tilt-validator/utils/", "tiltdb.csv")
+	tiltDBFile, err := os.OpenFile(tiltDBFilePath, os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to open tiltdb.csv file: %v", err))
+		return
+	}
+	tiltDBFile.Close()
+}
+
+func splitReceivers(receivers string) interface{} {
+	return strings.Split(receivers, ";")
 }
