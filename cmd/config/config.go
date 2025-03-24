@@ -29,7 +29,7 @@ func LoadConfig() (*Config, error) {
 	return config, nil
 }
 
-// func main() {
+// func main() { pubkey: DhPW6ne1DgYUZw3Dz94qfx68PvqSaiTfPijyf4MH9onK
 // 	cfg, err := config.LoadConfig()
 // 	if err != nil {
 // 		log.Fatalf("Error loading config: %v", err)

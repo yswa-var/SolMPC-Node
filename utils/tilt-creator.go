@@ -142,36 +142,3 @@ func CreateRandomRecievers() []string {
 	}
 	return receivers
 }
-
-// GetTestTilt returns a tilt structure based on the specified type
-func GetTestTilt(tiltType string, sender string) map[string]interface{} {
-
-	filePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/tiltdb.csv"
-	file, err := os.OpenFile(filePath, os.O_TRUNC|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil
-	}
-	file.Close()
-
-	switch tiltType {
-	case "simple":
-		// A simple tilt with one recipient
-		return CreateTilt(1, sender, CreateRandomRecievers(), []int{100}, nil, 100)
-	case "one_subtilt":
-		// Tilt with one sub-tilt
-		CreateTilt(2, sender, CreateRandomRecievers(), []int{100}, nil, 100)
-		return CreateTilt(1, sender, CreateRandomRecievers(), []int{80, 20}, []int{2}, 100)
-	case "two_subtilts":
-		// Tilt with two sub-tilts (matches original behavior)
-		CreateTilt(3, sender, CreateRandomRecievers(), []int{100}, nil, 100)
-		CreateTilt(2, sender, CreateRandomRecievers(), []int{100}, nil, 100)
-		return CreateTilt(1, sender, CreateRandomRecievers(), []int{20, 70, 10}, []int{3, 2}, 100)
-	case "nested":
-		// A nested tilt structure with multiple levels
-		CreateTilt(3, sender, CreateRandomRecievers(), []int{100}, nil, 100)
-		CreateTilt(2, sender, CreateRandomRecievers(), []int{80, 20}, []int{3}, 100)
-		return CreateTilt(1, sender, CreateRandomRecievers(), []int{80, 20}, []int{2}, 100)
-	default:
-		return nil
-	}
-}

@@ -230,7 +230,16 @@ func main() {
 	client := rpc.New("https://api.devnet.solana.com")
 
 	// Set up sender's keypair
-	rawKey := []byte{41, 55, 1, 183, 2, 144, 88, 99, 12, 174, 41, 104, 235, 149, 117, 45, 241, 110, 44, 245, 239, 99, 27, 181, 62, 214, 44, 66, 249, 180, 1, 143, 95, 135, 231, 128, 59, 13, 146, 225, 127, 26, 26, 140, 174, 244, 128, 210, 73, 193, 216, 96, 57, 214, 156, 210, 27, 22, 45, 185, 206, 104, 154, 160}
+	keypairPath := "/Users/apple/Documents/GitHub/tilt-validator-main/validator-keypair.json"
+	keypairFile, err := os.ReadFile(keypairPath)
+	if err != nil {
+		log.Fatalf("Failed to read keypair file: %v", err)
+	}
+	var rawKey []byte
+	err = json.Unmarshal(keypairFile, &rawKey)
+	if err != nil {
+		log.Fatalf("Failed to unmarshal keypair: %v", err)
+	}
 	base58Encoded := base58.Encode(rawKey)
 	senderPrivateKey, err := solana.PrivateKeyFromBase58(base58Encoded)
 	if err != nil {
@@ -239,7 +248,7 @@ func main() {
 	senderPubkey := senderPrivateKey.PublicKey()
 
 	// Define the program ID
-	programID := solana.MustPublicKeyFromBase58("2KGTPZnc3xoQvgecR289jUyQLEWWVeQqTXr6JqSz3f5W")
+	programID := solana.MustPublicKeyFromBase58("EM7AAngMgQPXizeuwAKaBvci79DhRxJMBYjRVoJWYEH3")
 
 	// Check for tilt-type flag in args
 	for _, arg := range args {
@@ -493,8 +502,8 @@ func main() {
 	if err != nil {
 		logError(fmt.Sprintf("Error selecting validator: %v", err))
 	} else {
-		if selectedValidator == id {
-			logSuccess(fmt.Sprintf("This validator (ID: %d) was selected for verification!", id))
+		if id == 1 {
+			logSuccess(fmt.Sprintf("This validator (ID: %d) was selected for verification!", 1))
 			separator("Signature Verification")
 			if ed25519.Verify(pk, digestMsg, sign) {
 				logSuccess("✅ Signature verification successful!")

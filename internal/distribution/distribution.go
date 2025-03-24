@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"tilt-valid/utils"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
@@ -75,7 +74,7 @@ func GetInitializeAccounts(distributionPDA, receiverListPDA, subTiltListPDA, sen
 // CreateInitializeInstruction creates the "initialize" instruction for the Solana program.
 func CreateInitializeInstruction(programID, senderPubkey solana.PublicKey, businessRules [10]byte, receivers [10]Receiver, subTilts []string) (solana.Instruction, error) {
 	// Generate PDAs
-	distributionPDA, err := GeneratePDA([]byte("distribution"), senderPubkey, programID)
+	distributionPDA, err := GeneratePDA([]byte("distribution_1"), senderPubkey, programID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,12 +104,28 @@ func CreateInitializeInstruction(programID, senderPubkey solana.PublicKey, busin
 // SendTransaction creates, signs, and sends a transaction with the given instructions.
 func SendTransaction(client *rpc.Client, instructions []solana.Instruction, senderPrivateKey solana.PrivateKey) (solana.Signature, error) {
 	senderPubkey := senderPrivateKey.PublicKey()
+	fmt.Println("--------start----------")
+	fmt.Println(senderPubkey)
 
 	// Get the latest blockhash
 	recent, err := client.GetLatestBlockhash(context.Background(), rpc.CommitmentFinalized)
 	if err != nil {
 		return solana.Signature{}, err
 	}
+	fmt.Println("--------GetLatestBlockhash----------")
+	fmt.Println(recent)
+
+	// balance
+	// Check sender's balance
+	balance, err := client.GetBalance(context.Background(), senderPubkey, rpc.CommitmentFinalized)
+	if err != nil {
+		return solana.Signature{}, fmt.Errorf("failed to get balance: %v", err)
+	}
+	fmt.Println("Sender Balance (lamports):", balance)
+	if balance.Value < 5000 { // 5000 lamports = 0.000005 SOL, minimum for a simple tx fee
+		return solana.Signature{}, fmt.Errorf("insufficient balance: %d lamports (need at least 5000)", balance)
+	}
+	//...
 
 	// Create the transaction
 	tx, err := solana.NewTransaction(
@@ -121,9 +136,11 @@ func SendTransaction(client *rpc.Client, instructions []solana.Instruction, send
 	if err != nil {
 		return solana.Signature{}, err
 	}
+	fmt.Println("-------NewTransaction-----------")
+	fmt.Println(tx)
 
 	// Sign the transaction
-	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+	signs, err := tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
 		if key.Equals(senderPubkey) {
 			return &senderPrivateKey
 		}
@@ -132,12 +149,16 @@ func SendTransaction(client *rpc.Client, instructions []solana.Instruction, send
 	if err != nil {
 		return solana.Signature{}, err
 	}
+	fmt.Println("-------Sign-----------")
+	fmt.Println(signs)
 
 	// Send the transaction
 	sig, err := client.SendTransaction(context.Background(), tx)
 	if err != nil {
 		return solana.Signature{}, err
 	}
+	fmt.Println("-------SendTransaction-----------")
+	fmt.Println(sig)
 
 	return sig, nil
 }
@@ -206,83 +227,4 @@ func Distribution(distBytes map[string]any) (DistributionData, error) {
 		Sender:        senderStr,
 		Subtilt:       subtilt,
 	}, nil
-}
-
-// AllocateAmounts distributes amounts across the hierarchy
-func AllocateAmounts(data DistributionData) ([]Allocation, error) {
-	// Handle empty BusinessRules for leaf nodes
-	if len(data.BusinessRules) == 0 {
-		if len(data.Subtilt) == 0 && len(data.Receiver) > 0 {
-			data.BusinessRules = []float64{100.0} // Default for leaf node with receivers
-		} else {
-			return nil, fmt.Errorf("invalid business rules: empty rules not allowed for node ID %d with %d subtilts", data.ID, len(data.Subtilt))
-		}
-	}
-
-	// // Validate business rules length
-	// if len(data.BusinessRules) != len(data.Subtilt)+1 {
-	//     return nil, fmt.Errorf("invalid business rules: length mismatch for node ID %d, expected %d, got %d", data.ID, len(data.Subtilt)+1, len(data.BusinessRules))
-	// }
-
-	// Validate total percentage
-	totalPercentage := 0.0
-	for _, percentage := range data.BusinessRules {
-		if percentage < 0 {
-			return nil, fmt.Errorf("invalid business rules: negative percentage %f for node ID %d", percentage, data.ID)
-		}
-		totalPercentage += percentage
-	}
-	if totalPercentage != 100.0 {
-		return nil, fmt.Errorf("invalid business rules: total percentage must be 100 for node ID %d, got %f", data.ID, totalPercentage)
-	}
-
-	// Validate receiver allocation
-	if len(data.Receiver) == 0 && data.BusinessRules[0] != 0 {
-		return nil, fmt.Errorf("invalid business rules: cannot allocate %f%% to non-existent receivers for node ID %d", data.BusinessRules[0], data.ID)
-	}
-
-	// Use a map to accumulate amounts
-	resultMap := make(map[string]float64)
-
-	// Allocate to receivers
-	receiverAmount := data.Amount * (data.BusinessRules[0] / 100.0)
-	if len(data.Receiver) > 0 {
-		share := receiverAmount / float64(len(data.Receiver))
-		for _, receiver := range data.Receiver {
-			resultMap[receiver] += share
-		}
-	}
-
-	// Allocate to sub-tilts
-	for i, subID := range data.Subtilt {
-		subAmount := data.Amount * (data.BusinessRules[i+1] / 100.0)
-		subData, err := utils.ReadTiltDataByID(subID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read sub-tilt data for ID %d: %w", subID, err)
-		}
-
-		// Construct subDistData with type safety
-		subDistData, err := Distribution(subData)
-		if err != nil {
-			return nil, fmt.Errorf("invalid sub-tilt data for ID %d: %w", subID, err)
-		}
-		subDistData.Amount += subAmount // Add parent's contribution
-
-		// Recursive call
-		subResult, err := AllocateAmounts(subDistData)
-		if err != nil {
-			return nil, fmt.Errorf("failed to allocate amounts for sub-tilt ID %d: %w", subID, err)
-		}
-		for _, alloc := range subResult {
-			resultMap[alloc.Receiver] += alloc.Amount
-		}
-	}
-
-	// Convert map to list
-	var allocations []Allocation
-	for receiver, amount := range resultMap {
-		allocations = append(allocations, Allocation{Receiver: receiver, Amount: amount})
-	}
-
-	return allocations, nil
 }
