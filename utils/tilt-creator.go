@@ -13,12 +13,12 @@ import (
 )
 
 func UpdateTiltCounter(value int) error {
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/create-tilt-flag.txt"
+	filePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/create-tilt-flag.txt"
 	return os.WriteFile(filePath, []byte(strconv.Itoa(value)), 0644)
 }
 
 func ReadTiltCounter() (int, error) {
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/create-tilt-flag.txt"
+	filePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/create-tilt-flag.txt"
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read file: %w", err)
@@ -44,7 +44,7 @@ func CreateTilt(id int, sender string, receiver []string, businessRules []int, s
 }
 
 func AppendTiltData(id int, sender string, receivers []string, businessRules []int, subtilt []int, amount int) error {
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/tiltdb.csv"
+	filePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/tiltdb.csv"
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
@@ -81,7 +81,7 @@ func AppendTiltData(id int, sender string, receivers []string, businessRules []i
 }
 
 func ReadTiltDataByID(id int) (map[string]interface{}, error) {
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/tiltdb.csv"
+	filePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/tiltdb.csv"
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -146,7 +146,7 @@ func CreateRandomRecievers() []string {
 // GetTestTilt returns a tilt structure based on the specified type
 func GetTestTilt(tiltType string, sender string) map[string]interface{} {
 
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/tiltdb.csv"
+	filePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/tiltdb.csv"
 	file, err := os.OpenFile(filePath, os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil

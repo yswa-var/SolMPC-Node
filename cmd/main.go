@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"os"
@@ -229,7 +230,7 @@ func main() {
 	client := rpc.New("https://api.devnet.solana.com")
 
 	// Set up sender's keypair
-	rawKey := []byte{164, 32, 125, 222, 175, 46, 12, 156, 205, 52, 159, 66, 48, 140, 67, 30, 202, 130, 25, 221, 94, 98, 188, 181, 101, 240, 113, 202, 30, 224, 226, 175, 50, 182, 177, 75, 11, 202, 132, 188, 121, 143, 136, 254, 127, 220, 33, 51, 201, 52, 42, 223, 221, 50, 176, 171, 16, 144, 64, 7, 231, 129, 21, 151}
+	rawKey := []byte{41, 55, 1, 183, 2, 144, 88, 99, 12, 174, 41, 104, 235, 149, 117, 45, 241, 110, 44, 245, 239, 99, 27, 181, 62, 214, 44, 66, 249, 180, 1, 143, 95, 135, 231, 128, 59, 13, 146, 225, 127, 26, 26, 140, 174, 244, 128, 210, 73, 193, 216, 96, 57, 214, 156, 210, 27, 22, 45, 185, 206, 104, 154, 160}
 	base58Encoded := base58.Encode(rawKey)
 	senderPrivateKey, err := solana.PrivateKeyFromBase58(base58Encoded)
 	if err != nil {
@@ -238,28 +239,7 @@ func main() {
 	senderPubkey := senderPrivateKey.PublicKey()
 
 	// Define the program ID
-	programID := solana.MustPublicKeyFromBase58("3pH5Q1nfYuGKECw1Ljj7otGvm3VfRjFWxqraVQPACRiM")
-
-	// Define parameters for the initialize function
-	businessRules := [10]byte{10, 10, 10, 10, 10, 10, 10, 10, 10, 10} // Sums to 100
-
-	// Generate 10 receiver public keys and amounts
-	var receivers [10]distribution.Receiver
-	for i := range receivers {
-		kp := solana.NewWallet()
-		receivers[i] = distribution.Receiver{
-			Pubkey: kp.PublicKey(),
-			Amount: 1000, // Example amount in lamports
-		}
-	}
-
-	subTilts := []string{"sub_tilt1", "sub_tilt2"}
-
-	// Create the instruction using the distribution package
-	instruction, err := distribution.CreateInitializeInstruction(programID, senderPubkey, businessRules, receivers, subTilts)
-	if err != nil {
-		log.Fatalf("Failed to create initialize instruction: %v", err)
-	}
+	programID := solana.MustPublicKeyFromBase58("2KGTPZnc3xoQvgecR289jUyQLEWWVeQqTXr6JqSz3f5W")
 
 	// Check for tilt-type flag in args
 	for _, arg := range args {
@@ -325,58 +305,113 @@ func main() {
 	wg.Wait() // Wait for DKG to complete
 	logInfo(fmt.Sprintf("DKG completed in %.2f seconds", time.Since(startTime).Seconds()))
 	transport.DeleteFileData()
-	time.Sleep(2 * time.Second)
-	flag, _ := utils.ReadTiltCounter()
-	if flag == 0 {
-		senderKey := sha256.Sum256(make([]byte, ed25519.PublicKeySize))
-		senderKeyStr := fmt.Sprintf("%x", senderKey)
-		utils.GetTestTilt(tiltType, senderKeyStr)
-		utils.UpdateTiltCounter(1)
-	}
-	time.Sleep(2 * time.Second)
 
-	// All validators read the distributions
-	// Read the tilt data for the given validator ID
-	distBytes, err := utils.ReadTiltDataByID(1)
-	if err != nil {
-		logError(fmt.Sprintf("Error reading tilt data: %v", err))
-		return
-	}
-	currentTilt, err := distribution.Distribution(distBytes)
-	flattenData, err := distribution.AllocateAmounts(currentTilt)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to distribute: %v", err))
-		return
-	}
-	// Save flattenData to distribution-dump.csv
-	dumpFilePath := filepath.Join("/Users/yash/Downloads/exercises/tilt-validator/utils/", "distribution-dump.csv")
-	dumpFile, err := os.Create(dumpFilePath)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to create distribution-dump.csv file: %v", err))
-		return
-	}
-	defer dumpFile.Close()
+	// create tilt
+	tiltFilePath := "/Users/apple/Documents/GitHub/tilt-validator-main/utils/current-tilt-data.txt"
 
-	writer := csv.NewWriter(dumpFile)
-	defer writer.Flush()
+	var instructionBytes []byte
+	var instruction solana.Instruction
+	if id == 1 {
+		// Define parameters for the initialize function
+		businessRules := [10]byte{10, 10, 10, 10, 10, 10, 10, 10, 10, 10} // Sums to 100
 
-	// Write headers
-	headers := []string{"ReceiverID", "Amount"}
-	if err := writer.Write(headers); err != nil {
-		logError(fmt.Sprintf("Failed to write headers to CSV file: %v", err))
-		return
-	}
+		// Generate 10 receiver public keys and amounts
+		var receivers [10]distribution.Receiver
+		for i := range receivers {
+			kp := solana.NewWallet()
+			receivers[i] = distribution.Receiver{
+				Pubkey: kp.PublicKey(),
+				Amount: 1000, // Example amount in lamports
+			}
+		}
 
-	// Write data
-	for receiverID, amount := range flattenData {
-		record := []string{strconv.Itoa(receiverID), fmt.Sprintf("%f", amount)}
-		if err := writer.Write(record); err != nil {
-			logError(fmt.Sprintf("Failed to write record to CSV file: %v", err))
+		subTilts := []string{"sub_tilt1", "sub_tilt2"}
+
+		// Create the instruction using the distribution package
+		instruction, err = distribution.CreateInitializeInstruction(programID, senderPubkey, businessRules, receivers, subTilts)
+		if err != nil {
+			log.Fatalf("Failed to create initialize instruction: %v", err)
+		}
+
+		instructionBytes, err := json.Marshal(instruction)
+		if err != nil {
+			logError(fmt.Sprintf("Failed to marshal instruction: %v", err))
+		}
+
+		// Remove the existing file if it exists
+		err = os.Remove(tiltFilePath)
+		if err != nil && !os.IsNotExist(err) {
+			logError(fmt.Sprintf("Failed to delete existing file: %v", err))
 			return
 		}
+
+		// Create and write new instruction data
+		tiltFile, err := os.Create(tiltFilePath)
+		if err != nil {
+			logError(fmt.Sprintf("Failed to create tilt data file: %v", err))
+			return
+		}
+		defer tiltFile.Close()
+
+		_, err = tiltFile.Write(instructionBytes)
+		if err != nil {
+			logError(fmt.Sprintf("Failed to write instruction data: %v", err))
+			return
+		}
+	} else {
+		// Read from the file
+		time.Sleep(3 * time.Second)
+	}
+	tiltFile, err := os.Open(tiltFilePath)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to open tilt data file: %v", err))
+		return
+	}
+	defer tiltFile.Close()
+
+	instructionBytes, err = io.ReadAll(tiltFile)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to read instruction data: %v", err))
+		return
 	}
 
-	logSuccess("Flatten data saved to distribution-dump.csv")
+	logSuccess("Instruction data read from current-tilt-data.txt")
+	if instructionBytes == nil {
+		logError("Instruction data is nil, cannot proceed")
+		return
+	}
+
+	// println(string(instructionBytes))
+
+	// // All validators read the distributions
+	// // Read the tilt data for the given validator ID
+	// distBytes, err := utils.ReadTiltDataByID(1)
+	// if err != nil {
+	// 	logError(fmt.Sprintf("Error reading tilt data: %v", err))
+	// 	return
+	// }
+	// currentTilt, err := distribution.Distribution(distBytes)
+	// flattenData, err := distribution.AllocateAmounts(currentTilt)
+	// if err != nil {
+	// 	logError(fmt.Sprintf("Failed to distribute: %v", err))
+	// 	return
+	// }
+	// // Save flattenData to distribution-dump.csv
+	// dumpFilePath := filepath.Join("/Users/apple/Documents/GitHub/tilt-validator-main/utils/", "distribution-dump.csv")
+	// dumpFile, err := os.Create(dumpFilePath)
+	// if err != nil {
+	// 	logError(fmt.Sprintf("Failed to create distribution-dump.csv file: %v", err))
+	// 	return
+	// }
+	// defer dumpFile.Close()
+
+	// writer := csv.NewWriter(dumpFile)
+	// defer writer.Flush()
+	// for _, value := range flattenData {
+	// 	writer.Write([]string{fmt.Sprintf("%v", value)})
+	// }
+
+	// logSuccess("Flatten data saved to distribution-dump.csv")
 	// Convert flattenData to a map[string]interface{} for msgToSign
 
 	distStr := make(map[string]uint64)
@@ -391,12 +426,19 @@ func main() {
 	for _, k := range keys {
 		sortedDist[k] = distStr[k]
 	}
-	msgToSign, err := json.Marshal(instruction)
+	// instructionBytes, err := json.Marshal(instruction)
+	// if err != nil {
+	// 	logError(fmt.Sprintf("Failed to marshal instruction: %v", err))
+	// 	return
+	// }
+
+	msgToSign, err := json.Marshal(sha256.Sum256(instructionBytes))
 	if err != nil {
 		logError(fmt.Sprintf("Failed to marshal msgToSign: %v", err))
 		return
 	}
-	digestMsg := mpc.Digest(msgToSign)
+	fmt.Println(msgToSign)
+	digestMsg := mpc.Digest(msgToSign) // if we use msgToSign the signing process works fine but n using instructions we get error
 
 	separator("Signing Process")
 	wg.Add(1)
@@ -438,7 +480,7 @@ func main() {
 
 	// Wait for all validators to update their VRF hashes
 	logInfo("Waiting for other validators to update their VRF hashes...")
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// Reload validators to get updated VRF hashes
 	updatedValidators, err := loadValidators(validatorsFilePath)
@@ -460,25 +502,29 @@ func main() {
 				logError("❌ Signature verification failed!")
 			}
 
-			// seding signature to the network
-			sig, err := distribution.SendTransaction(client, []solana.Instruction{instruction}, senderPrivateKey)
-			if err != nil {
-				log.Fatalf("Failed to send transaction: %v", err)
-			}
+			if instruction != nil {
+				// sending signature to the network
+				sig, err := distribution.SendTransaction(client, []solana.Instruction{instruction}, senderPrivateKey)
+				if err != nil {
+					log.Fatalf("Failed to send transaction: %v", err)
+				}
 
-			log.Printf("Transaction sent successfully: %s", sig)
+				log.Printf("Transaction sent successfully: %s", sig)
+			} else {
+				logError("Instruction is nil, cannot send transaction")
+			}
 
 		} else {
 			logInfo(fmt.Sprintf("Validator ID: %d was selected for verification", selectedValidator))
 		}
 	}
-	utils.UpdateTiltCounter(0)
-	// Clear the content of the tiltdb.csv file
-	tiltDBFilePath := filepath.Join("/Users/yash/Downloads/exercises/tilt-validator/utils/", "tiltdb.csv")
-	tiltDBFile, err := os.OpenFile(tiltDBFilePath, os.O_TRUNC|os.O_WRONLY, 0644)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to open tiltdb.csv file: %v", err))
-		return
-	}
-	tiltDBFile.Close()
+	// utils.UpdateTiltCounter(0)
+	// // Clear the content of the tiltdb.csv file
+	// tiltDBFilePath := filepath.Join("/Users/apple/Documents/GitHub/tilt-validator-main/utils", "tiltdb.csv")
+	// tiltDBFile, err := os.OpenFile(tiltDBFilePath, os.O_TRUNC|os.O_WRONLY, 0644)
+	// if err != nil {
+	// 	logError(fmt.Sprintf("Failed to open tiltdb.csv file: %v", err))
+	// 	return
+	// }
+	// tiltDBFile.Close()
 }
