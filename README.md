@@ -1,3 +1,9 @@
+```
+Branching:
+- main: simulate mvp creation of transaction, distribution. handels tree structure of tilts. with multiple test cases (without solana/smart-contract integration)
+- solana_integration: simulate mvp creation of transaction with solana integration for fewer test cases.
+```
+
 - **cmd/**: Initial setup and configuration.
   - **main.go**: Entry point for the application.
   - **config/config.go**: Application configuration.
