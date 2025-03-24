@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +22,10 @@ import (
 	"tilt-valid/internal/exchange"
 	mpc "tilt-valid/internal/mpc"
 	"tilt-valid/utils"
+
+	"github.com/gagliardetto/solana-go"
+	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/mr-tron/base58"
 )
 
 // Define a flag for selecting the tilt type
@@ -220,6 +224,43 @@ func main() {
 	id, _ := strconv.Atoi(args[0])
 	separator(fmt.Sprintf("Starting Validator ID: %d", id))
 
+	// rpc bullshit
+	// Initialize RPC client for Devnet
+	client := rpc.New("https://api.devnet.solana.com")
+
+	// Set up sender's keypair
+	rawKey := []byte{164, 32, 125, 222, 175, 46, 12, 156, 205, 52, 159, 66, 48, 140, 67, 30, 202, 130, 25, 221, 94, 98, 188, 181, 101, 240, 113, 202, 30, 224, 226, 175, 50, 182, 177, 75, 11, 202, 132, 188, 121, 143, 136, 254, 127, 220, 33, 51, 201, 52, 42, 223, 221, 50, 176, 171, 16, 144, 64, 7, 231, 129, 21, 151}
+	base58Encoded := base58.Encode(rawKey)
+	senderPrivateKey, err := solana.PrivateKeyFromBase58(base58Encoded)
+	if err != nil {
+		log.Fatalf("Failed to parse sender private key: %v", err)
+	}
+	senderPubkey := senderPrivateKey.PublicKey()
+
+	// Define the program ID
+	programID := solana.MustPublicKeyFromBase58("3pH5Q1nfYuGKECw1Ljj7otGvm3VfRjFWxqraVQPACRiM")
+
+	// Define parameters for the initialize function
+	businessRules := [10]byte{10, 10, 10, 10, 10, 10, 10, 10, 10, 10} // Sums to 100
+
+	// Generate 10 receiver public keys and amounts
+	var receivers [10]distribution.Receiver
+	for i := range receivers {
+		kp := solana.NewWallet()
+		receivers[i] = distribution.Receiver{
+			Pubkey: kp.PublicKey(),
+			Amount: 1000, // Example amount in lamports
+		}
+	}
+
+	subTilts := []string{"sub_tilt1", "sub_tilt2"}
+
+	// Create the instruction using the distribution package
+	instruction, err := distribution.CreateInitializeInstruction(programID, senderPubkey, businessRules, receivers, subTilts)
+	if err != nil {
+		log.Fatalf("Failed to create initialize instruction: %v", err)
+	}
+
 	// Check for tilt-type flag in args
 	for _, arg := range args {
 		if len(arg) > 11 && arg[:11] == "--tilt-type=" {
@@ -350,7 +391,7 @@ func main() {
 	for _, k := range keys {
 		sortedDist[k] = distStr[k]
 	}
-	msgToSign, err := json.Marshal(sortedDist)
+	msgToSign, err := json.Marshal(instruction)
 	if err != nil {
 		logError(fmt.Sprintf("Failed to marshal msgToSign: %v", err))
 		return
@@ -386,7 +427,6 @@ func main() {
 
 	// VRF logic implementation
 	separator("VRF-based Validator Selection")
-	fmt.Println("********Tilt completed********")
 
 	// Generate VRF hash for this validator
 	logInfo("Generating VRF hash...")
@@ -419,6 +459,15 @@ func main() {
 			} else {
 				logError("❌ Signature verification failed!")
 			}
+
+			// seding signature to the network
+			sig, err := distribution.SendTransaction(client, []solana.Instruction{instruction}, senderPrivateKey)
+			if err != nil {
+				log.Fatalf("Failed to send transaction: %v", err)
+			}
+
+			log.Printf("Transaction sent successfully: %s", sig)
+
 		} else {
 			logInfo(fmt.Sprintf("Validator ID: %d was selected for verification", selectedValidator))
 		}
@@ -432,8 +481,4 @@ func main() {
 		return
 	}
 	tiltDBFile.Close()
-}
-
-func splitReceivers(receivers string) interface{} {
-	return strings.Split(receivers, ";")
 }
