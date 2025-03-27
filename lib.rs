@@ -1,151 +1,46 @@
 use anchor_lang::prelude::*;
 
-declare_id!("3WwkA4gXYDR1fQ1BHfe5J4XoFYZ5kdSPe2kGkDE3uC22");
+declare_id!("EM7AAngMgQPXizeuwAKaBvci79DhRxJMBYjRVoJWYEH3");
 
 #[program]
-pub mod distribution {
+pub mod payment_validator {
     use super::*;
 
-    /// Initializes the distribution system with business rules, receivers, and sub-tilts as strings.
-    pub fn initialize(
-        ctx: Context<Initialize>,
-        business_rules: [u8; 10],
-        receivers: [Receiver; 10],
-        sub_tilts: Vec<String>,
+    pub fn validate_payment_distribution(
+        ctx: Context<ValidatePayment>, 
+        total_amount: u64, 
+        receivers: Vec<Pubkey>, 
+        amounts: Vec<u64>
     ) -> Result<()> {
-        // Validate that business rules sum to 100
-        let total: u32 = business_rules.iter().map(|&x| x as u32).sum();
-        require!(total == 100, ErrorCode::InvalidBusinessRules);
-
-        // Set up DistributionAccount
-        let distribution = &mut ctx.accounts.distribution;
-        distribution.sender = ctx.accounts.sender.key();
-        distribution.business_rules = business_rules;
-        distribution.is_initialized = true;
-
-        // Set up ReceiverList
-        let receiver_list = &mut ctx.accounts.receiver_list;
-        receiver_list.receivers = receivers;
-
-        // Set up SubTiltList
-        let sub_tilt_list = &mut ctx.accounts.sub_tilt_list;
-        sub_tilt_list.sub_tilts = sub_tilts;
-
-        Ok(())
-    }
-
-    /// Distributes funds based on the stored receivers and logs sub-tilts.
-    pub fn distribute(ctx: Context<Distribute>) -> Result<()> {
-        let distribution = &ctx.accounts.distribution;
-
-        // Validate initialization and sender
+        // Validate that number of receivers matches number of amounts
         require!(
-            distribution.is_initialized,
-            ErrorCode::AccountNotInitialized
-        );
-        require!(
-            distribution.sender == ctx.accounts.sender.key(),
-            ErrorCode::InvalidSender
+            receivers.len() == amounts.len(), 
+            PaymentError::MismatchedReceiversAndAmounts
         );
 
-        // Log transfers for receivers
-        for receiver in &ctx.accounts.receiver_list.receivers {
-            msg!("Transferring {} to {}", receiver.amount, receiver.pubkey);
-        }
+        // Calculate sum of amounts
+        let sum: u64 = amounts.iter().sum();
 
-        // Log sub-tilts
-        for sub_tilt in &ctx.accounts.sub_tilt_list.sub_tilts {
-            msg!("SubTilt Entry: {}", sub_tilt);
-        }
+        // Validate that sum matches total amount
+        require!(
+            sum == total_amount, 
+            PaymentError::TotalAmountMismatch
+        );
 
         Ok(())
     }
 }
 
-// --- Account Structures ---
-
 #[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(
-    init_if_needed, // This will only create the account if it doesn't exist
-    payer = sender,
-    space = 8 + 32 + 10 + 1,
-    seeds = [b"distribution_1", sender.key().as_ref()],
-    bump
-)]
-    pub distribution: Account<'info, DistributionAccount>,
-
-    #[account(
-    init_if_needed,
-    payer = sender,
-    space = 8 + 10 * (32 + 8),
-    seeds = [b"receiver_list", sender.key().as_ref()],
-    bump
-)]
-    pub receiver_list: Account<'info, ReceiverList>,
-
-    #[account(
-    init_if_needed,
-    payer = sender,
-    space = 8 + 1024,
-    seeds = [b"sub_tilt_list", sender.key().as_ref()],
-    bump
-)]
-    pub sub_tilt_list: Account<'info, SubTiltList>,
-
+pub struct ValidatePayment<'info> {
     #[account(mut)]
     pub sender: Signer<'info>,
-    pub system_program: Program<'info, System>,
 }
-
-#[derive(Accounts)]
-pub struct Distribute<'info> {
-    #[account(seeds = [b"distribution", sender.key().as_ref()], bump)]
-    pub distribution: Account<'info, DistributionAccount>,
-
-    #[account(seeds = [b"receiver_list", sender.key().as_ref()], bump)]
-    pub receiver_list: Account<'info, ReceiverList>,
-
-    #[account(seeds = [b"sub_tilt_list", sender.key().as_ref()], bump)]
-    pub sub_tilt_list: Account<'info, SubTiltList>,
-
-    pub sender: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[account]
-pub struct DistributionAccount {
-    pub sender: Pubkey,
-    pub business_rules: [u8; 10],
-    pub is_initialized: bool,
-}
-
-#[account]
-pub struct ReceiverList {
-    pub receivers: [Receiver; 10],
-}
-
-#[account]
-pub struct SubTiltList {
-    pub sub_tilts: Vec<String>,
-}
-
-// --- Data Structures ---
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct Receiver {
-    pub pubkey: Pubkey,
-    pub amount: u64,
-}
-
-// --- Error Codes ---
 
 #[error_code]
-pub enum ErrorCode {
-    #[msg("Business rules must sum to 100")]
-    InvalidBusinessRules,
-    #[msg("Account not initialized")]
-    AccountNotInitialized,
-    #[msg("Invalid sender")]
-    InvalidSender,
+pub enum PaymentError {
+    #[msg("Number of receivers does not match number of amounts")]
+    MismatchedReceiversAndAmounts,
+    #[msg("Total amount does not match sum of individual amounts")]
+    TotalAmountMismatch,
 }

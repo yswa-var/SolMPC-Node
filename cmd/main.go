@@ -4,16 +4,16 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/csv"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,9 +23,9 @@ import (
 	mpc "tilt-valid/internal/mpc"
 	"tilt-valid/utils"
 
+	"github.com/blocto/solana-go-sdk/types"
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
-	"github.com/mr-tron/base58"
 )
 
 // Define a flag for selecting the tilt type
@@ -36,14 +36,6 @@ func init() {
 }
 
 const threshold = 2
-
-type Validator struct {
-	ID      string
-	Name    string
-	Stake   float64
-	Active  bool
-	VRFHash *big.Int
-}
 
 type Tilt struct {
 	ID         string  `json:"id"`
@@ -80,138 +72,6 @@ func separator(title string) {
 	fmt.Printf("\n%s===== %s =====%s\n\n", Blue, title, Reset)
 }
 
-func loadValidators(filePath string) ([]Validator, error) {
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %v", err)
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CSV file: %v", err)
-	}
-
-	var validators []Validator
-	for _, record := range records {
-		if len(record) != 5 {
-			return nil, fmt.Errorf("invalid record: %v", record)
-		}
-		stake, _ := strconv.ParseFloat(record[2], 64)
-		active, _ := strconv.ParseBool(record[3])
-		vrfHash := new(big.Int)
-		vrfHash.SetString(record[4], 10)
-		validators = append(validators, Validator{
-			ID:      record[0],
-			Name:    record[1],
-			Stake:   stake,
-			Active:  active,
-			VRFHash: vrfHash,
-		})
-	}
-	return validators, nil
-}
-
-// GenerateVRFHash generates a verifiable random hash for the validator
-func generateVRFHash() *big.Int {
-	// Generate a random seed based on current time and other inputs
-	seed := time.Now().UnixNano()
-	randomSeed := big.NewInt(seed)
-
-	// Create hash of the seed
-	h := sha256.New()
-	h.Write(randomSeed.Bytes())
-	hashBytes := h.Sum(nil)
-
-	// Convert hash to big.Int
-	vrfHash := new(big.Int).SetBytes(hashBytes)
-	return vrfHash
-}
-
-// UpdateVRFHash updates the validator's VRF hash in the CSV file
-func updateVRFHash(validatorID int, vrfHash *big.Int, filePath string) error {
-	// Read existing file
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to open file: %v", err)
-	}
-
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		file.Close()
-		return fmt.Errorf("failed to read CSV file: %v", err)
-	}
-	file.Close()
-
-	// Update the record for the validator
-	if validatorID < len(records) {
-		records[validatorID][4] = vrfHash.String()
-	} else {
-		return fmt.Errorf("validator ID %d out of range", validatorID)
-	}
-
-	// Write back to file
-	tempFile := filePath + ".tmp"
-	outFile, err := os.Create(tempFile)
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %v", err)
-	}
-
-	writer := csv.NewWriter(outFile)
-	err = writer.WriteAll(records)
-	if err != nil {
-		outFile.Close()
-		return fmt.Errorf("failed to write to CSV file: %v", err)
-	}
-
-	writer.Flush()
-	outFile.Close()
-
-	// Replace the original file with the temporary file
-	err = os.Rename(tempFile, filePath)
-	if err != nil {
-		return fmt.Errorf("failed to rename temp file: %v", err)
-	}
-
-	return nil
-}
-
-// SelectValidator selects a validator based on the combined VRF hashes
-func selectValidator(validators []Validator) (int, error) {
-	if len(validators) == 0 {
-		return 0, fmt.Errorf("no validators available")
-	}
-
-	// Combine all VRF hashes
-	combinedHash := new(big.Int)
-	for _, validator := range validators {
-		if validator.Active {
-			combinedHash.Xor(combinedHash, validator.VRFHash)
-		}
-	}
-
-	// Count active validators
-	activeCount := 0
-	for _, validator := range validators {
-		if validator.Active {
-			activeCount++
-		}
-	}
-
-	if activeCount == 0 {
-		return 0, fmt.Errorf("no active validators")
-	}
-
-	// Use the combined hash to select a validator (mod active count)
-	// Add 1 because validator IDs are 1-based in this implementation
-	selectedIndex := new(big.Int).Mod(combinedHash, big.NewInt(int64(activeCount))).Int64() + 1
-
-	return int(selectedIndex), nil
-}
-
 func main() {
 	args := os.Args[1:]
 	wg := sync.WaitGroup{}
@@ -224,42 +84,27 @@ func main() {
 	id, _ := strconv.Atoi(args[0])
 	separator(fmt.Sprintf("Starting Validator ID: %d", id))
 
-	// rpc bullshit
 	// Initialize RPC client for Devnet
 	client := rpc.New("https://api.devnet.solana.com")
 
-	// Set up sender's keypair
-	rawKey := []byte{164, 32, 125, 222, 175, 46, 12, 156, 205, 52, 159, 66, 48, 140, 67, 30, 202, 130, 25, 221, 94, 98, 188, 181, 101, 240, 113, 202, 30, 224, 226, 175, 50, 182, 177, 75, 11, 202, 132, 188, 121, 143, 136, 254, 127, 220, 33, 51, 201, 52, 42, 223, 221, 50, 176, 171, 16, 144, 64, 7, 231, 129, 21, 151}
-	base58Encoded := base58.Encode(rawKey)
-	senderPrivateKey, err := solana.PrivateKeyFromBase58(base58Encoded)
+	programID, err := solana.PublicKeyFromBase58("EM7AAngMgQPXizeuwAKaBvci79DhRxJMBYjRVoJWYEH3")
 	if err != nil {
-		log.Fatalf("Failed to parse sender private key: %v", err)
-	}
-	senderPubkey := senderPrivateKey.PublicKey()
-
-	// Define the program ID
-	programID := solana.MustPublicKeyFromBase58("3pH5Q1nfYuGKECw1Ljj7otGvm3VfRjFWxqraVQPACRiM")
-
-	// Define parameters for the initialize function
-	businessRules := [10]byte{10, 10, 10, 10, 10, 10, 10, 10, 10, 10} // Sums to 100
-
-	// Generate 10 receiver public keys and amounts
-	var receivers [10]distribution.Receiver
-	for i := range receivers {
-		kp := solana.NewWallet()
-		receivers[i] = distribution.Receiver{
-			Pubkey: kp.PublicKey(),
-			Amount: 1000, // Example amount in lamports
-		}
+		log.Fatalf("Invalid program ID: %v", err)
 	}
 
-	subTilts := []string{"sub_tilt1", "sub_tilt2"}
-
-	// Create the instruction using the distribution package
-	instruction, err := distribution.CreateInitializeInstruction(programID, senderPubkey, businessRules, receivers, subTilts)
+	// Payer setup (replace with your actual keypair)
+	privateKeyBytes := [64]byte{16, 246, 168, 249, 237, 255, 125, 101, 217, 247, 127, 166, 74, 53, 162, 51, 171, 210, 214, 143, 114, 231, 90, 39, 199, 152, 51, 247, 155, 89, 49, 209, 188, 164, 235, 18, 201, 90, 220, 112, 187, 42, 70, 106, 82, 127, 58, 134, 94, 39, 122, 20, 109, 110, 8, 203, 126, 148, 192, 140, 5, 77, 75, 60}
+	wallet, err := types.AccountFromBytes(privateKeyBytes[:])
 	if err != nil {
-		log.Fatalf("Failed to create initialize instruction: %v", err)
+		log.Fatalf("Failed to create wallet from private key: %v", err)
 	}
+
+	// loading config
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println("error in loading config")
+	}
+	path := cfg.ValidatorPath
 
 	// Check for tilt-type flag in args
 	for _, arg := range args {
@@ -268,12 +113,10 @@ func main() {
 			break
 		}
 	}
-
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		fmt.Println("error in loading config")
+	if id == 1 {
+		// Create a new tilt
+		utils.GetTestTilt(cfg.TiltDb, tiltType)
 	}
-	path := cfg.ValidatorPath
 
 	validatorsFilePath := filepath.Join(path, "validators.csv")
 	validators, err := loadValidators(validatorsFilePath)
@@ -281,6 +124,7 @@ func main() {
 		logError(fmt.Sprintf("Error loading validators: %v", err))
 		return
 	}
+	// transaction creation successfully created.
 
 	// Create a channel for incoming messages
 	receiveChan := make(chan []byte, 10000)
@@ -325,59 +169,93 @@ func main() {
 	wg.Wait() // Wait for DKG to complete
 	logInfo(fmt.Sprintf("DKG completed in %.2f seconds", time.Since(startTime).Seconds()))
 	transport.DeleteFileData()
-	time.Sleep(2 * time.Second)
-	flag, _ := utils.ReadTiltCounter()
-	if flag == 0 {
-		senderKey := sha256.Sum256(make([]byte, ed25519.PublicKeySize))
-		senderKeyStr := fmt.Sprintf("%x", senderKey)
-		utils.GetTestTilt(tiltType, senderKeyStr)
-		utils.UpdateTiltCounter(1)
-	}
-	time.Sleep(2 * time.Second)
 
-	// All validators read the distributions
-	// Read the tilt data for the given validator ID
-	distBytes, err := utils.ReadTiltDataByID(1)
-	if err != nil {
-		logError(fmt.Sprintf("Error reading tilt data: %v", err))
-		return
-	}
-	currentTilt, err := distribution.Distribution(distBytes)
-	flattenData, err := distribution.AllocateAmounts(currentTilt)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to distribute: %v", err))
-		return
-	}
-	// Save flattenData to distribution-dump.csv
-	dumpFilePath := filepath.Join("/Users/yash/Downloads/exercises/tilt-validator/utils/", "distribution-dump.csv")
-	dumpFile, err := os.Create(dumpFilePath)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to create distribution-dump.csv file: %v", err))
-		return
-	}
-	defer dumpFile.Close()
-
-	writer := csv.NewWriter(dumpFile)
-	defer writer.Flush()
-
-	// Write headers
-	headers := []string{"ReceiverID", "Amount"}
-	if err := writer.Write(headers); err != nil {
-		logError(fmt.Sprintf("Failed to write headers to CSV file: %v", err))
-		return
-	}
-
-	// Write data
-	for receiverID, amount := range flattenData {
-		record := []string{strconv.Itoa(receiverID), fmt.Sprintf("%f", amount)}
-		if err := writer.Write(record); err != nil {
-			logError(fmt.Sprintf("Failed to write record to CSV file: %v", err))
+	// TODO: 2 simplify in required format
+	tilt, _ := utils.ReadTiltData(cfg.TiltDb)
+	convertedTilt := make(map[string]map[string]interface{})
+	for key, value := range tilt {
+		if innerMap, ok := value.(map[string]interface{}); ok {
+			convertedTilt[key] = innerMap
+		} else {
+			logError(fmt.Sprintf("Invalid type for key %s in tilt data", key))
 			return
 		}
 	}
+	allocation, err := distribution.AllocateAmounts(convertedTilt, "1")
+	if err != nil {
+		logError(fmt.Sprintf("Error allocating amounts: %v", err))
+		return
+	}
 
-	logSuccess("Flatten data saved to distribution-dump.csv")
-	// Convert flattenData to a map[string]interface{} for msgToSign
+	var amounts []uint64
+	var totalAmount uint64
+	var recipients []solana.PublicKey
+
+	for _, alloc := range allocation {
+		amounts = append(amounts, uint64(alloc.Amount))
+		totalAmount += uint64(alloc.Amount)
+
+		// Trim spaces and check for invalid characters
+		receiver := strings.TrimSpace(alloc.Receiver)
+
+		pubKey, err := solana.PublicKeyFromBase58(receiver)
+		if err != nil {
+			logError(fmt.Sprintf("Invalid public key: %v (Receiver: %s)", err, receiver))
+			return
+		}
+		recipients = append(recipients, pubKey)
+	}
+
+	// Step 4: Serialize Instruction Data
+	instructionData, err := serializeInstructionData(amounts, totalAmount, recipients)
+	if err != nil {
+		log.Fatalf("Failed to serialize instruction data: %v", err)
+	}
+
+	// Step 5: Prepare Accounts
+	accounts := []*solana.AccountMeta{
+		{PublicKey: solana.PublicKeyFromBytes(wallet.PublicKey[:]), IsSigner: true, IsWritable: true}, // Sender
+	}
+
+	// Add recipient accounts
+	for _, recipient := range recipients {
+		accounts = append(accounts, &solana.AccountMeta{
+			PublicKey:  recipient,
+			IsSigner:   false,
+			IsWritable: true,
+		})
+	}
+
+	// Step 6: Create Instruction
+	instruction := solana.NewInstruction(programID, accounts, instructionData)
+	// Step 7: Get Recent Blockhash
+	ctx := context.Background()
+	recent, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
+	if err != nil {
+		log.Fatalf("Failed to get recent blockhash: %v", err)
+	}
+
+	// Step 8: Build Transaction
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{instruction},
+		recent.Value.Blockhash,
+		solana.TransactionPayer(solana.PublicKeyFromBytes(wallet.PublicKey[:])),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	// Step 9: Sign Transaction
+	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
+		if key.Equals(solana.PublicKeyFromBytes(wallet.PublicKey[:])) {
+			privateKey := solana.PrivateKey(wallet.PrivateKey)
+			return &privateKey
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatalf("Failed to sign transaction: %v", err)
+	}
 
 	distStr := make(map[string]uint64)
 
@@ -391,16 +269,21 @@ func main() {
 	for _, k := range keys {
 		sortedDist[k] = distStr[k]
 	}
-	msgToSign, err := json.Marshal(instruction)
+
+	instructionBytes, err := json.Marshal(instruction)
+	if err != nil {
+		logError(fmt.Sprintf("Failed to marshal instruction: %v", err))
+		return
+	}
+	msgToSign, err := json.Marshal(instructionBytes)
 	if err != nil {
 		logError(fmt.Sprintf("Failed to marshal msgToSign: %v", err))
 		return
 	}
-	digestMsg := mpc.Digest(msgToSign)
+	digestMsg := mpc.Digest(msgToSign) // if we use msgToSign the signing process works fine but n using instructions we get error
 
 	separator("Signing Process")
 	wg.Add(1)
-	ctx := context.Background()
 	var sign []byte
 
 	// Reinitialize for signing
@@ -438,7 +321,7 @@ func main() {
 
 	// Wait for all validators to update their VRF hashes
 	logInfo("Waiting for other validators to update their VRF hashes...")
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// Reload validators to get updated VRF hashes
 	updatedValidators, err := loadValidators(validatorsFilePath)
@@ -451,8 +334,8 @@ func main() {
 	if err != nil {
 		logError(fmt.Sprintf("Error selecting validator: %v", err))
 	} else {
-		if selectedValidator == id {
-			logSuccess(fmt.Sprintf("This validator (ID: %d) was selected for verification!", id))
+		if id == selectedValidator {
+			logSuccess(fmt.Sprintf("This validator (ID: %d) was selected for verification!", 1))
 			separator("Signature Verification")
 			if ed25519.Verify(pk, digestMsg, sign) {
 				logSuccess("✅ Signature verification successful!")
@@ -460,25 +343,58 @@ func main() {
 				logError("❌ Signature verification failed!")
 			}
 
-			// seding signature to the network
-			sig, err := distribution.SendTransaction(client, []solana.Instruction{instruction}, senderPrivateKey)
+			// Step 10: Send Transaction
+			sig, err := client.SendTransactionWithOpts(ctx, tx, rpc.TransactionOpts{
+				SkipPreflight:       false,
+				PreflightCommitment: rpc.CommitmentFinalized,
+			})
 			if err != nil {
 				log.Fatalf("Failed to send transaction: %v", err)
 			}
-
-			log.Printf("Transaction sent successfully: %s", sig)
+			fmt.Printf("Transaction sent! Signature: %s\n", sig)
 
 		} else {
 			logInfo(fmt.Sprintf("Validator ID: %d was selected for verification", selectedValidator))
 		}
 	}
-	utils.UpdateTiltCounter(0)
-	// Clear the content of the tiltdb.csv file
-	tiltDBFilePath := filepath.Join("/Users/yash/Downloads/exercises/tilt-validator/utils/", "tiltdb.csv")
-	tiltDBFile, err := os.OpenFile(tiltDBFilePath, os.O_TRUNC|os.O_WRONLY, 0644)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to open tiltdb.csv file: %v", err))
-		return
+}
+
+// serializeInstructionData creates the instruction data for validate_payment_distribution
+func serializeInstructionData(amounts []uint64, totalAmount uint64, recipients []solana.PublicKey) ([]byte, error) {
+	var data []byte
+
+	// Discriminator: First 8 bytes of SHA256("global:validate_payment_distribution")
+	hash := sha256.Sum256([]byte("global:validate_payment_distribution"))
+	data = append(data, hash[:8]...)
+
+	// Serialize total_amount (u64)
+	totalBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(totalBytes, totalAmount)
+	data = append(data, totalBytes...)
+
+	// Serialize receivers (Vec<Pubkey>)
+	// Length of receivers
+	lengthBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(lengthBytes, uint32(len(recipients)))
+	data = append(data, lengthBytes...)
+
+	// Add each receiver's public key (32 bytes)
+	for _, recipient := range recipients {
+		data = append(data, recipient.Bytes()...)
 	}
-	tiltDBFile.Close()
+
+	// Serialize amounts (Vec<u64>)
+	// Length of amounts
+	amountLengthBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(amountLengthBytes, uint32(len(amounts)))
+	data = append(data, amountLengthBytes...)
+
+	// Add each amount
+	for _, amount := range amounts {
+		amountBytes := make([]byte, 8)
+		binary.LittleEndian.PutUint64(amountBytes, amount)
+		data = append(data, amountBytes...)
+	}
+
+	return data, nil
 }
