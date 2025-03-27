@@ -61,6 +61,10 @@ go run cmd/main.go <validator_id> [--tilt-type=<tilt_type>]
 Where:
 - `<validator_id>` is the unique identifier for the validator
 - `<tilt_type>` is one of: simple, one_subtilt, two_subtilts, nested
+  - simple: A simple tilt with one recipient
+  - one_subtilt: Tilt with one sub-tilt
+  - two_subtilts: Tilt with two sub-tilts (matches original behavior)
+  - nested: A nested tilt structure with multiple levels
 
 ## Security Features
 
