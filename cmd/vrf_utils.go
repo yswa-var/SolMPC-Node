@@ -4,10 +4,119 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/csv"
 	"fmt"
 	"math/big"
+	"os"
+	"strconv"
 	"time"
 )
+
+type Validator struct {
+	ID      string
+	Name    string
+	Stake   float64
+	Active  bool
+	VRFHash *big.Int
+}
+
+// GenerateVRFHash generates a verifiable random hash for the validator
+func generateVRFHash() *big.Int {
+	// Generate a random seed based on current time and other inputs
+	seed := time.Now().UnixNano()
+	randomSeed := big.NewInt(seed)
+
+	// Create hash of the seed
+	h := sha256.New()
+	h.Write(randomSeed.Bytes())
+	hashBytes := h.Sum(nil)
+
+	// Convert hash to big.Int
+	vrfHash := new(big.Int).SetBytes(hashBytes)
+	return vrfHash
+}
+
+// UpdateVRFHash updates the validator's VRF hash in the CSV file
+func updateVRFHash(validatorID int, vrfHash *big.Int, filePath string) error {
+	// Read existing file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %v", err)
+	}
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		file.Close()
+		return fmt.Errorf("failed to read CSV file: %v", err)
+	}
+	file.Close()
+
+	// Update the record for the validator
+	if validatorID < len(records) {
+		records[validatorID][4] = vrfHash.String()
+	} else {
+		return fmt.Errorf("validator ID %d out of range", validatorID)
+	}
+
+	// Write back to file
+	tempFile := filePath + ".tmp"
+	outFile, err := os.Create(tempFile)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %v", err)
+	}
+
+	writer := csv.NewWriter(outFile)
+	err = writer.WriteAll(records)
+	if err != nil {
+		outFile.Close()
+		return fmt.Errorf("failed to write to CSV file: %v", err)
+	}
+
+	writer.Flush()
+	outFile.Close()
+
+	// Replace the original file with the temporary file
+	err = os.Rename(tempFile, filePath)
+	if err != nil {
+		return fmt.Errorf("failed to rename temp file: %v", err)
+	}
+
+	return nil
+}
+
+// SelectValidator selects a validator based on the combined VRF hashes
+func selectValidator(validators []Validator) (int, error) {
+	if len(validators) == 0 {
+		return 0, fmt.Errorf("no validators available")
+	}
+
+	// Combine all VRF hashes
+	combinedHash := new(big.Int)
+	for _, validator := range validators {
+		if validator.Active {
+			combinedHash.Xor(combinedHash, validator.VRFHash)
+		}
+	}
+
+	// Count active validators
+	activeCount := 0
+	for _, validator := range validators {
+		if validator.Active {
+			activeCount++
+		}
+	}
+
+	if activeCount == 0 {
+		return 0, fmt.Errorf("no active validators")
+	}
+
+	// Use the combined hash to select a validator (mod active count)
+	// Add 1 because validator IDs are 1-based in this implementation
+	selectedIndex := new(big.Int).Mod(combinedHash, big.NewInt(int64(activeCount))).Int64() + 1
+
+	return int(selectedIndex), nil
+}
 
 // VRFProof stores the proof of randomness generation
 type VRFProof struct {
@@ -93,4 +202,38 @@ func SelectValidator(validators []Validator, vrfProofs []*VRFProof) *Validator {
 
 	logSuccess(fmt.Sprintf("Chosen Validator: %s", validators[selectedIndex].ID))
 	return &validators[selectedIndex]
+}
+
+func loadValidators(filePath string) ([]Validator, error) {
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CSV file: %v", err)
+	}
+
+	var validators []Validator
+	for _, record := range records {
+		if len(record) != 5 {
+			return nil, fmt.Errorf("invalid record: %v", record)
+		}
+		stake, _ := strconv.ParseFloat(record[2], 64)
+		active, _ := strconv.ParseBool(record[3])
+		vrfHash := new(big.Int)
+		vrfHash.SetString(record[4], 10)
+		validators = append(validators, Validator{
+			ID:      record[0],
+			Name:    record[1],
+			Stake:   stake,
+			Active:  active,
+			VRFHash: vrfHash,
+		})
+	}
+	return validators, nil
 }
