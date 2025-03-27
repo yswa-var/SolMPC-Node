@@ -1,60 +1,86 @@
-```
-Branching:
-- main: simulate mvp creation of transaction, distribution. handels tree structure of tilts. with multiple test cases (without solana/smart-contract integration)
-- solana_integration: simulate mvp creation of transaction with solana integration for fewer test cases.
-```
+# Tilt-Valid: Secure Distributed Validator System for Solana
 
-- **cmd/**: Initial setup and configuration.
-  - **main.go**: Entry point for the application.
-  - **config/config.go**: Application configuration.
-  - **vrf_utils.go**: Logic for validator selection during final submission.
+## Overview
 
-- **data/**: Validator database.
-  - **validator.csv**: Registry of validators.
+Tilt-Valid is a distributed validator system for Solana blockchain that enables secure, threshold-based transaction signing and validation using multi-party computation (MPC). The system allows a set of validators to collectively authorize transactions without any single validator having complete control over the signing keys.
 
-- **eddsa/**: Temporary testing files.
+## Key Features
 
-- **internals/**: Core logic and modules.
-  - **distribution/**:
-    - **distribution.go**: Main tilt distribution logic.
-    - **distribution.md**: Explanation and plan for the distribution logic.
-  - **exchange/**: Mimics a gossip protocol using CSVs.
-    - **setup.go**: Cleans previous data.
-    - **receiver.go**: Handles incoming communications between validators.
-    - **sender.go**: Sends messages between validators.
-  - **mpc/**:
-    - **keygen.go**: Key generation for DKG (Distributed Key Generation).
-    - **mpc_test.go**: Unit tests for the MPC package.
-    - **party.go**: Logic for creating MPC parties.
-    - **sign.go**: Generates the final signature.
-  - **Transport/**: Temporary CSV files for inter-validator communication.
-  - **Validators/**:
-    - **validator.go**: Logic for creating validator parameters.
-  - **solana_tx_test/**: Test module for submitting final signature to Solana.
-  - **utils/**: Utility files for supporting the tilt distribution.
-    - **create-tilt-flag.txt**: Flag for validators during tilt creation.
-    - **current-tilt-data.txt**: Communicates transactions needing validation.
-    - **distribution-dump.csv**: Facilitates manual validation of signed transactions.
-    - **logger.go**: Logging utilities for type and format fixes.
-    - **tilt-creator.go**: Helper functions for transaction creation.
-    - **tiltdb.csv**: Database of created transactions for manual validation.
+- **Threshold Multi-Party Computation (MPC)**: Uses a t-of-n threshold scheme where at least t validators must participate to generate signatures
+- **Distributed Key Generation (DKG)**: Secure generation of shared keys without any single party knowing the complete key
+- **VRF-based Validator Selection**: Fair, verifiable random selection of validators for transaction verification
+- **Solana Transaction Integration**: Creates, signs, and submits transactions to the Solana blockchain
+- **Configurable Tilt Types**: Supports various distribution patterns for payments (simple, one_subtilt, two_subtilts, nested)
 
-- **.env**: Paths and signatures configuration (requires refactoring).
-- **go.mod, go.sum**: Dependencies and module management files.
-- **lib.rs**: Solana smart contract code.
-- **validator-keypair.json**: Devnet keypair for hosted smart contracts.
+## Architecture
 
-## Setup
-1. Clone the repository.
-2. Configure the `.env` file with appropriate paths and signatures.
-3. install tmux "brew install tmux"
-4. compile and run `cmd/run_validator.sh`
+The system consists of several key components:
+
+- **Validators**: Independent nodes that participate in the consensus and signing process
+- **Transport Layer**: Handles secure message exchange between validators
+- **MPC Protocol**: Implements threshold signing using distributed key shares
+- **Distribution System**: Manages payment allocations to recipients
+- **VRF Selection**: Uses Verifiable Random Functions to select validators for verification
+
+## How It Works
+
+1. **Validator Setup**: Each validator initializes with a unique ID and connects to the validator network
+
+2. **Distributed Key Generation**:
+   - Validators collectively generate a shared public key
+   - Each validator receives a key share without revealing it to others
+   - Requires threshold number of validators to participate
+
+3. **Transaction Creation**:
+   - System reads tilt data and allocates amounts to recipients
+   - Creates Solana instructions with appropriate recipient accounts and amounts
+   - Builds a complete transaction with recent blockhash
+
+4. **Distributed Signing**:
+   - Transaction data is hashed and distributed to validators
+   - Validators collaborate to sign the transaction without revealing their key shares
+   - Produces a valid signature only when threshold validators participate
+
+5. **Validator Selection & Verification**:
+   - Each validator generates a VRF hash
+   - Based on these hashes, one validator is randomly selected
+   - Selected validator verifies the collective signature and submits the transaction
+
+6. **Transaction Submission**:
+   - The selected validator sends the signed transaction to the Solana network
+   - Transaction is processed on the blockchain
 
 ## Usage
-1. Execute the main file: `go run cmd/main.go`.
-2. Validators communicate via the exchange module using CSV files.
-3. Final transactions are pushed to Solana devnet after signature generation.
 
-## Testing
-- Unit tests for the MPC module: `go test ./internals/mpc/...`
-- Solana smart contract testing: Refer to `solana_tx_test`.
+Run a validator node with:
+
+```bash
+go run cmd/main.go <validator_id> [--tilt-type=<tilt_type>]
+```
+
+Where:
+- `<validator_id>` is the unique identifier for the validator
+- `<tilt_type>` is one of: simple, one_subtilt, two_subtilts, nested
+
+## Security Features
+
+- No single validator has complete control over signing keys
+- Threshold scheme ensures security even if some validators are compromised
+- VRF selection provides unpredictable, fair validator selection
+- Distributed architecture eliminates single points of failure
+
+## Dependencies
+
+- Solana Go SDK
+- Ed25519 cryptography
+- Custom MPC implementation for secure multi-party computation
+
+## Configuration
+
+Configure the system through the config file to set:
+- Validator paths
+- Threshold requirements
+- Network parameters
+- Database locations for tilt data
+
+This distributed architecture ensures high security and availability for Solana transaction signing and validation.
