@@ -16,7 +16,7 @@ type Config struct {
 }
 
 func LoadConfig() (*Config, error) {
-	err := godotenv.Load("/Users/yash/Documents/tilt/tilt-validator/.env")
+	err := godotenv.Load("/Users/yash/Documents/SolMPC-Node/.env")
 	if err != nil {
 		// Don't fail if .env file doesn't exist, just log it
 		fmt.Printf("Warning: .env file not found, using default values\n")
@@ -25,7 +25,7 @@ func LoadConfig() (*Config, error) {
 	// Set default values if environment variables are not set
 	tiltDb := os.Getenv("TILT_DB")
 	if tiltDb == "" {
-		tiltDb = "/Users/yash/Documents/tilt/tilt-validator/utils/tiltdb.csv"
+		tiltDb = "/Users/yash/Documents/SolMPC-Node/utils/tiltdb.csv"
 	}
 
 	config := &Config{

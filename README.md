@@ -11,6 +11,41 @@
 
 ---
 
+## 🎯 Strategic Vision: Validator Infrastructure + Secure Treasury System for DAOs
+
+**Tilt-Valid** is positioned to become the foundational infrastructure for **secure DAO treasury management** and **distributed validator operations** on Solana and beyond.
+
+### ✅ Why This Combo Wins:
+
+#### 1. **Directly Useful to Solana & PoS Ecosystems**
+
+- Solana's validator economy is huge and performance-focused
+- Tilt-Valid showcases practical security in real-time signing — very relevant to Jito, Lido, Marinade, Helium, etc.
+- Addresses the critical need for secure, distributed validator operations
+
+#### 2. **DAO Treasury Security = Hot Pain Point**
+
+- Projects like Juicebox, Aragon, and Gnosis already show traction here
+- Most existing solutions lack verifiable randomness and scalable MPC
+- You can position Tilt-Valid as a modular vault and treasury engine, powered by MPC
+
+#### 3. **VRF + MPC is Rare and Credible**
+
+- There are few open-source examples combining these two technologies
+- This makes your repo uniquely valuable for devs, VCs, or foundations to notice
+- Creates a defensible moat in the validator infrastructure space
+
+### 🚀 Future Roadmap
+
+| Phase       | Focus                         | Target Market                        |
+| ----------- | ----------------------------- | ------------------------------------ |
+| **Phase 1** | Core MPC + VRF Infrastructure | Solana Validators, Staking Pools     |
+| **Phase 2** | DAO Treasury Integration      | DAO Governance, Multi-sig Upgrades   |
+| **Phase 3** | Cross-chain Expansion         | Ethereum, Polygon, Other PoS Chains  |
+| **Phase 4** | Enterprise Features           | Institutional DeFi, Compliance Tools |
+
+---
+
 ## ✨ Key Features
 
 - **Threshold MPC**: Uses a `t-of-n` scheme to collaboratively sign transactions.
@@ -44,26 +79,26 @@
 
 ```bash
 go run cmd/main.go <validator_id> --tilt-type=<tilt_type>
-````
+```
 
 **Arguments:**
 
-* `<validator_id>`: Unique ID for each validator (e.g., 1, 2, 3)
-* `--tilt-type=`: Choose one of:
+- `<validator_id>`: Unique ID for each validator (e.g., 1, 2, 3)
+- `--tilt-type=`: Choose one of:
 
-  * `simple`: Single recipient tilt
-  * `one_subtilt`: One-level nested
-  * `two_subtilts`: Two sub-tilts (original behavior)
-  * `nested`: Fully nested recursive structure
+  - `simple`: Single recipient tilt
+  - `one_subtilt`: One-level nested
+  - `two_subtilts`: Two sub-tilts (original behavior)
+  - `nested`: Fully nested recursive structure
 
 ---
 
 ## 🛡 Security Design
 
-* ✅ **No single-point signing**: Private keys are never reconstructed.
-* ✅ **Threshold fault tolerance**: System is functional even if `n - t` nodes are offline.
-* ✅ **Replay protection**: Nonce and blockhash management.
-* ✅ **VRF-based validator election**: Prevents manipulation in leader selection.
+- ✅ **No single-point signing**: Private keys are never reconstructed.
+- ✅ **Threshold fault tolerance**: System is functional even if `n - t` nodes are offline.
+- ✅ **Replay protection**: Nonce and blockhash management.
+- ✅ **VRF-based validator election**: Prevents manipulation in leader selection.
 
 ---
 
@@ -89,11 +124,11 @@ tilt-valid/
 
 Via config files or environment variables:
 
-* Validator paths and identities
-* Threshold value `t`
-* Tilt type
-* Logging level
-* Future: Replace file-exchange with libp2p or gRPC transport
+- Validator paths and identities
+- Threshold value `t`
+- Tilt type
+- Logging level
+- Future: Replace file-exchange with libp2p or gRPC transport
 
 ---
 
@@ -112,14 +147,17 @@ Then view the example transaction here:
 
 ## 🛠 Future Enhancements
 
-| Feature                        | Status | Description                          |
-| ------------------------------ | ------ | ------------------------------------ |
-| P2P Transport Layer            | 🧪 MVP | Replace file I/O with libp2p/gRPC    |
-| Signature Audit Logging        | 🔜     | Track validator participation logs   |
-| ZK or VSS MPC Integration      | 🔜     | Explore zk-MPC and verifiable shares |
-| WASM Client SDK                | 🔜     | For browser or JS-based usage        |
-| Replay Attack Protection       | ✅      | Handles recent blockhash and nonce   |
-| VRF Upgrade with Commit-Reveal | 🔜     | Fair validator selection with proof  |
+| Feature                            | Status | Description                             |
+| ---------------------------------- | ------ | --------------------------------------- |
+| **DAO Treasury Integration**       | 🔜     | Multi-sig vaults with MPC signing       |
+| **P2P Transport Layer**            | 🧪 MVP | Replace file I/O with libp2p/gRPC       |
+| **Signature Audit Logging**        | 🔜     | Track validator participation logs      |
+| **ZK or VSS MPC Integration**      | 🔜     | Explore zk-MPC and verifiable shares    |
+| **WASM Client SDK**                | 🔜     | For browser or JS-based usage           |
+| **Replay Attack Protection**       | ✅     | Handles recent blockhash and nonce      |
+| **VRF Upgrade with Commit-Reveal** | 🔜     | Fair validator selection with proof     |
+| **Cross-chain Support**            | 🔜     | Ethereum, Polygon validator integration |
+| **Enterprise Compliance**          | 🔜     | KYC/AML features for institutional use  |
 
 ---
 
@@ -137,10 +175,10 @@ go mod tidy
 
 ### Key Areas to Explore
 
-* `internal/mpc/`: Enhance signing protocol or add ZK
-* `exchange/`: Swap to libp2p/pubsub transport
-* `distribution/`: Add new tilt types or structure
-* `cmd/main.go`: CLI or orchestration logic
+- `internal/mpc/`: Enhance signing protocol or add ZK
+- `exchange/`: Swap to libp2p/pubsub transport
+- `distribution/`: Add new tilt types or structure
+- `cmd/main.go`: CLI or orchestration logic
 
 ---
 
@@ -155,4 +193,3 @@ Built as part of exploring secure Solana infrastructure with MPC and distributed
 ## 📄 License
 
 MIT — feel free to fork, improve, and contribute.
-
