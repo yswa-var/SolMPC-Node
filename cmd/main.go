@@ -172,6 +172,14 @@ func main() {
 
 	// TODO: 2 simplify in required format
 	tilt, _ := utils.ReadTiltData(cfg.TiltDb)
+
+	// Add debug output
+	fmt.Printf("Debug: TiltDb path: %s\n", cfg.TiltDb)
+	fmt.Printf("Debug: Tilt data keys: %v\n", getKeys(tilt))
+	for key, value := range tilt {
+		fmt.Printf("Debug: Key %s: %+v\n", key, value)
+	}
+
 	convertedTilt := make(map[string]map[string]interface{})
 	for key, value := range tilt {
 		if innerMap, ok := value.(map[string]interface{}); ok {
@@ -181,6 +189,9 @@ func main() {
 			return
 		}
 	}
+
+	fmt.Printf("Debug: Converted tilt data keys: %v\n", getKeysStringMap(convertedTilt))
+
 	allocation, err := distribution.AllocateAmounts(convertedTilt, "1")
 	if err != nil {
 		logError(fmt.Sprintf("Error allocating amounts: %v", err))
@@ -397,4 +408,20 @@ func serializeInstructionData(amounts []uint64, totalAmount uint64, recipients [
 	}
 
 	return data, nil
+}
+
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func getKeysStringMap(m map[string]map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

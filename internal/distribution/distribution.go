@@ -53,7 +53,7 @@ func allocateRecursive(tiltData map[string]map[string]interface{}, currentID str
 	// Extract node data
 	ownAmount := nodeData["amount"].(int)
 	businessRules := nodeData["business_rules"].([]int)
-	receivers := nodeData["receivers"].([]string)
+	receivers := nodeData["receiver"].([]string) // Changed from "receivers" to "receiver"
 	subtilts := nodeData["subtilt"].([]int)
 
 	// Validate business rules

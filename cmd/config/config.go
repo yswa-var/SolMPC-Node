@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -16,17 +16,23 @@ type Config struct {
 }
 
 func LoadConfig() (*Config, error) {
-	err := godotenv.Load("/Users/apple/Documents/GitHub/tv-solana_int/.env")
+	err := godotenv.Load("/Users/yash/Documents/tilt/tilt-validator/.env")
 	if err != nil {
-		log.Fatalf("Error loading .env file")
-		return nil, err
+		// Don't fail if .env file doesn't exist, just log it
+		fmt.Printf("Warning: .env file not found, using default values\n")
+	}
+
+	// Set default values if environment variables are not set
+	tiltDb := os.Getenv("TILT_DB")
+	if tiltDb == "" {
+		tiltDb = "/Users/yash/Documents/tilt/tilt-validator/utils/tiltdb.csv"
 	}
 
 	config := &Config{
 		SolanaProductId: os.Getenv("SOLANA_PRODUCT_ID"),
 		ValidatorPath:   os.Getenv("VALIDATOR_PATH"),
 		TransportPath:   os.Getenv("TRANSPORT_PATH"),
-		TiltDb:          os.Getenv("TILT_DB"),
+		TiltDb:          tiltDb,
 		Distribution:    os.Getenv("DISTRIBUTION_DUMP"),
 	}
 

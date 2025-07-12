@@ -12,12 +12,12 @@ import (
 )
 
 func UpdateTiltCounter(value int) error {
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/create-tilt-flag.txt"
+	filePath := "/Users/yash/Documents/tilt/tilt-validator/utils/create-tilt-flag.txt"
 	return os.WriteFile(filePath, []byte(strconv.Itoa(value)), 0644)
 }
 
 func ReadTiltCounter() (int, error) {
-	filePath := "/Users/yash/Downloads/exercises/tilt-validator/utils/create-tilt-flag.txt"
+	filePath := "/Users/yash/Documents/tilt/tilt-validator/utils/create-tilt-flag.txt"
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read file: %w", err)
@@ -37,7 +37,7 @@ func CreateTilt(filepath string, id int, receiver []string, businessRules []int,
 		"subtilt":        subtilt,
 		"amount":         amount,
 	}
-	file, err := os.OpenFile("/Users/apple/Documents/GitHub/tv-solana_int/utils/tiltdb.csv", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	file, err := os.OpenFile(filepath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to write to file: %w", err)
 	}
@@ -49,11 +49,11 @@ func CreateTilt(filepath string, id int, receiver []string, businessRules []int,
 	// Convert businessRules and subtilt to JSON strings
 	businessRulesStr, err := json.Marshal(businessRules)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, fmt.Errorf("failed to marshal business rules: %w", err)
 	}
 	subtiltStr, err := json.Marshal(subtilt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, fmt.Errorf("failed to marshal subtilt: %w", err)
 	}
 
 	record := []string{
@@ -65,7 +65,7 @@ func CreateTilt(filepath string, id int, receiver []string, businessRules []int,
 	}
 
 	if err := writer.Write(record); err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, fmt.Errorf("failed to write record: %w", err)
 	}
 	return tilt, nil
 }
@@ -112,7 +112,7 @@ func ReadTiltData(filePath string) (map[string]interface{}, error) {
 		}
 
 		data[id] = map[string]interface{}{
-			"receivers":      receivers,
+			"receiver":       receivers, // Changed from "receivers" to "receiver"
 			"business_rules": businessRules,
 			"subtilt":        subtilt,
 			"amount":         amount,
