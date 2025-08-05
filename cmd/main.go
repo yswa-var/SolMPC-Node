@@ -13,12 +13,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"tilt-valid/cmd/config"
-	"tilt-valid/internal/distribution"
 	"tilt-valid/internal/exchange"
 	mpc "tilt-valid/internal/mpc"
 	"tilt-valid/utils"
@@ -28,19 +26,23 @@ import (
 	"github.com/gagliardetto/solana-go/rpc"
 )
 
-// Define a flag for selecting the tilt type
-var tiltType string
-
-func init() {
-	flag.StringVar(&tiltType, "tilt-type", "two_subtilts", "Type of tilt to create (simple, one_subtilt, two_subtilts, nested)")
-}
+// No command line flags needed for ballot system
 
 const threshold = 2
 
-type Tilt struct {
-	ID         string  `json:"id"`
-	Amount     float64 `json:"amount"`
-	ReceiverID string  `json:"receiver_id"`
+type Ballot struct {
+	ID        string    `json:"id"`
+	Question  string    `json:"question"`
+	Options   []string  `json:"options"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+}
+
+type Vote struct {
+	BallotID  string    `json:"ballot_id"`
+	VoterID   string    `json:"voter_id"`
+	Choice    int       `json:"choice"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 const (
@@ -78,7 +80,7 @@ func main() {
 	flag.Parse()
 
 	if len(args) < 1 {
-		logError("Usage: go run main.go <validator_id> [--tilt-type=<tilt_type>]")
+		logError("Usage: go run main.go <validator_id>")
 		return
 	}
 	id, _ := strconv.Atoi(args[0])
@@ -106,17 +108,7 @@ func main() {
 	}
 	path := cfg.ValidatorPath
 
-	// Check for tilt-type flag in args
-	for _, arg := range args {
-		if len(arg) > 11 && arg[:11] == "--tilt-type=" {
-			tiltType = arg[11:]
-			break
-		}
-	}
-	if id == 1 {
-		// Create a new tilt
-		utils.GetTestTilt(cfg.TiltDb, tiltType)
-	}
+	// No longer need tilt creation - using ballot system instead
 
 	validatorsFilePath := filepath.Join(path, "validators.csv")
 	validators, err := loadValidators(validatorsFilePath)
@@ -170,55 +162,58 @@ func main() {
 	logInfo(fmt.Sprintf("DKG completed in %.2f seconds", time.Since(startTime).Seconds()))
 	transport.DeleteFileData()
 
-	// TODO: 2 simplify in required format
-	tilt, _ := utils.ReadTiltData(cfg.TiltDb)
-
-	// Add debug output
-	fmt.Printf("Debug: TiltDb path: %s\n", cfg.TiltDb)
-	fmt.Printf("Debug: Tilt data keys: %v\n", getKeys(tilt))
-	for key, value := range tilt {
-		fmt.Printf("Debug: Key %s: %+v\n", key, value)
+	// Initialize Ballot System
+	separator("Ballot System Initialization")
+	ballot := &Ballot{
+		ID:        "demo-ballot-1",
+		Question:  "Should we implement voting-as-a-service?",
+		Options:   []string{"Yes", "No", "Abstain"},
+		StartTime: time.Now().Add(-1 * time.Hour),
+		EndTime:   time.Now().Add(1 * time.Hour),
 	}
 
-	convertedTilt := make(map[string]map[string]interface{})
-	for key, value := range tilt {
-		if innerMap, ok := value.(map[string]interface{}); ok {
-			convertedTilt[key] = innerMap
-		} else {
-			logError(fmt.Sprintf("Invalid type for key %s in tilt data", key))
-			return
+	logInfo(fmt.Sprintf("Ballot created: %s", ballot.Question))
+	logInfo(fmt.Sprintf("Options: %v", ballot.Options))
+
+	// Simulate votes for demo (in production, these come from API)
+	demoVotes := []Vote{
+		{BallotID: ballot.ID, VoterID: "voter1", Choice: 0, Timestamp: time.Now()},
+		{BallotID: ballot.ID, VoterID: "voter2", Choice: 0, Timestamp: time.Now()},
+		{BallotID: ballot.ID, VoterID: "voter3", Choice: 1, Timestamp: time.Now()},
+	}
+
+	logInfo(fmt.Sprintf("Processing %d demo votes...", len(demoVotes)))
+
+	// Prepare vote tally data for Solana
+	var voteCounts []uint64
+	for i := range ballot.Options {
+		count := uint64(0)
+		for _, vote := range demoVotes {
+			if vote.Choice == i {
+				count++
+			}
 		}
+		voteCounts = append(voteCounts, count)
 	}
 
-	fmt.Printf("Debug: Converted tilt data keys: %v\n", getKeysStringMap(convertedTilt))
+	totalVotes := uint64(len(demoVotes))
 
-	allocation, err := distribution.AllocateAmounts(convertedTilt, "1")
-	if err != nil {
-		logError(fmt.Sprintf("Error allocating amounts: %v", err))
-		return
+	// Display vote results
+	logInfo("Vote tally results:")
+	for i, option := range ballot.Options {
+		logInfo(fmt.Sprintf("  %s: %d votes", option, voteCounts[i]))
+	}
+	logInfo(fmt.Sprintf("Total votes cast: %d", totalVotes))
+
+	// Create Solana instruction for vote result
+	// Use a consistent recipient across all validators for MPC signing
+	fixedRecipient, _ := solana.PublicKeyFromBase58("11111111111111111111111111111112") // System Program
+	recipients := []solana.PublicKey{
+		fixedRecipient, // Results recipient - same across all validators
 	}
 
-	var amounts []uint64
-	var totalAmount uint64
-	var recipients []solana.PublicKey
-
-	for _, alloc := range allocation {
-		amounts = append(amounts, uint64(alloc.Amount))
-		totalAmount += uint64(alloc.Amount)
-
-		// Trim spaces and check for invalid characters
-		receiver := strings.TrimSpace(alloc.Receiver)
-
-		pubKey, err := solana.PublicKeyFromBase58(receiver)
-		if err != nil {
-			logError(fmt.Sprintf("Invalid public key: %v (Receiver: %s)", err, receiver))
-			return
-		}
-		recipients = append(recipients, pubKey)
-	}
-
-	// Step 4: Serialize Instruction Data
-	instructionData, err := serializeInstructionData(amounts, totalAmount, recipients)
+	// Step 4: Serialize Instruction Data for Vote Results
+	instructionData, err := serializeInstructionData(voteCounts, totalVotes, recipients)
 	if err != nil {
 		log.Fatalf("Failed to serialize instruction data: %v", err)
 	}
@@ -256,21 +251,28 @@ func main() {
 		log.Fatalf("Failed to create transaction: %v", err)
 	}
 
-	// Step 9: Sign Transaction
-	_, err = tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
-		if key.Equals(solana.PublicKeyFromBytes(wallet.PublicKey[:])) {
-			privateKey := solana.PrivateKey(wallet.PrivateKey)
-			return &privateKey
-		}
-		return nil
-	})
+	// Step 9: Sign Transaction with MPC
+	// Get the transaction message to sign
+	txMessage, err := tx.Message.MarshalBinary()
 	if err != nil {
-		log.Fatalf("Failed to sign transaction: %v", err)
+		log.Fatalf("Failed to marshal transaction message: %v", err)
 	}
 
-	distStr := make(map[string]uint64)
-
+	// Wait for MPC signing (this should happen after line 313)
+	// Move the MPC signing code here and use the transaction message
 	mpcParty.SetShareData(keyShare)
+	mpcParty.Init(parties, threshold, transport.SendMsg)
+
+	txDigestMsg := mpc.Digest(txMessage)
+	txSign, err := mpcParty.Sign(ctx, txDigestMsg)
+	if err != nil {
+		log.Fatalf("Failed to sign transaction with MPC: %v", err)
+	}
+
+	// Apply MPC signature to transaction
+	tx.Signatures = []solana.Signature{solana.SignatureFromBytes(txSign)}
+
+	distStr := make(map[string]uint64)
 	sortedDist := make(map[string]uint64)
 	var keys []string
 	for k := range distStr {
@@ -281,36 +283,9 @@ func main() {
 		sortedDist[k] = distStr[k]
 	}
 
-	instructionBytes, err := json.Marshal(instruction)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to marshal instruction: %v", err))
-		return
-	}
-	msgToSign, err := json.Marshal(instructionBytes)
-	if err != nil {
-		logError(fmt.Sprintf("Failed to marshal msgToSign: %v", err))
-		return
-	}
-	digestMsg := mpc.Digest(msgToSign) // if we use msgToSign the signing process works fine but n using instructions we get error
+	// Instruction marshaling removed - now using transaction message directly for MPC signing
 
-	separator("Signing Process")
-	wg.Add(1)
-	var sign []byte
-
-	// Reinitialize for signing
-	mpcParty.Init(parties, threshold, transport.SendMsg)
-	go func() {
-		defer wg.Done()
-		logInfo("Starting the signing process...")
-		sign, err = mpcParty.Sign(ctx, digestMsg)
-		if err != nil {
-			logError(fmt.Sprintf("Failed to sign message: %v", err))
-		} else {
-			logSuccess(fmt.Sprintf("Signature generated: %x", sign))
-		}
-	}()
-	wg.Wait()
-	logInfo("Signing process completed.")
+	// MPC signing is now done during transaction signing above
 
 	pk, err := mpcParty.ThresholdPK()
 	if err != nil {
@@ -348,10 +323,10 @@ func main() {
 		if id == selectedValidator {
 			logSuccess(fmt.Sprintf("This validator (ID: %d) was selected for verification!", 1))
 			separator("Signature Verification")
-			if ed25519.Verify(pk, digestMsg, sign) {
-				logSuccess("✅ Signature verification successful!")
+			if ed25519.Verify(pk, txDigestMsg, txSign) {
+				logSuccess("✅ Transaction signature verification successful!")
 			} else {
-				logError("❌ Signature verification failed!")
+				logError("❌ Transaction signature verification failed!")
 			}
 
 			// Step 10: Send Transaction
